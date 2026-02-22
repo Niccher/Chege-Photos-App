@@ -18,14 +18,11 @@ interface PhotoService {
     ): Response<AuthResponse>
 
     @GET("explore")
-    suspend fun getPhotos(
-        @Header("Authorization") token: String
-    ): Response<PhotoListResponse>
+    suspend fun getPhotos(): Response<PhotoListResponse>
 
     @Multipart
     @POST("upload")
     suspend fun uploadPhoto(
-        @Header("Authorization") token: String,
         @Part file: MultipartBody.Part,
         @Part("description") description: RequestBody? = null
     ): Response<AuthResponse>

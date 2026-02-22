@@ -33,12 +33,12 @@ class PhotoRepository(private val context: Context) {
         return photos
     }
 
-    suspend fun syncPhoto(token: String, file: File): Boolean {
+    suspend fun syncPhoto(file: File): Boolean {
         val requestFile = file.asRequestBody("image/*".toMediaTypeOrNull())
         val body = MultipartBody.Part.createFormData("file", file.name, requestFile)
         
         return try {
-            val response = ApiClient.photoService.uploadPhoto("Bearer $token", body)
+            val response = ApiClient.getPhotoService(context).uploadPhoto(body)
             response.isSuccessful
         } catch (e: Exception) {
             false

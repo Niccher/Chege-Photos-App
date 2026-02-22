@@ -18,7 +18,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import com.niccher.prjphotos.models.Photo
+import com.niccher.prjphotos.utils.SessionManager
+import com.niccher.prjphotos.models.AuthResponse
 import com.niccher.prjphotos.network.ApiClient
 import com.niccher.prjphotos.repository.PhotoRepository
 import com.niccher.prjphotos.ui.theme.PrjPhotosTheme
@@ -43,14 +44,14 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(repository: PhotoRepository) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val sessionManager = remember { SessionManager(context) }
     val sharedPrefs = remember { context.getSharedPreferences("prj_photos_prefs", android.content.Context.MODE_PRIVATE) }
     
     var serverUrl by remember { mutableStateOf(sharedPrefs.getString("server_url", "https://photos.chegecache.co.ke/") ?: "") }
-    var isLoggedIn by remember { mutableStateOf(false) }
-    var token by remember { mutableStateOf("") }
+    var isLoggedIn by remember { mutableStateOf(sessionManager.isLoggedIn()) }
     var photos by remember { mutableStateOf(listOf<File>()) }
-    var email by remember { mutableStateOf("domino@example.com") }
-    var password by remember { mutableStateOf("password") }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -62,7 +63,7 @@ fun MainScreen(repository: PhotoRepository) {
 
     LaunchedEffect(Unit) {
         // Initialize ApiClient with persisted URL
-        ApiClient.updateBaseUrl(serverUrl)
+        ApiClient.updateBaseUrl(serverUrl, context)
         
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
@@ -89,7 +90,7 @@ fun MainScreen(repository: PhotoRepository) {
                     onValueChange = { 
                         serverUrl = it
                         sharedPrefs.edit().putString("server_url", it).apply()
-                        ApiClient.updateBaseUrl(it)
+                        ApiClient.updateBaseUrl(it, context)
                     },
                     label = { Text("Server URL") },
                     modifier = Modifier.fillMaxWidth()
@@ -104,10 +105,17 @@ fun MainScreen(repository: PhotoRepository) {
                 Button(onClick = {
                     scope.launch {
                         try {
-                            val response = ApiClient.photoService.login(email, password)
+                            val response = ApiClient.getPhotoService(context).login(email, password)
                             if (response.isSuccessful) {
-                                token = response.body()?.access_token ?: ""
-                                isLoggedIn = true
+                                val authData = response.body()
+                                authData?.access_token?.let {
+                                    sessionManager.saveAuthToken(it)
+                                    authData.user?.let { user ->
+                                        sessionManager.saveUserProfile(user.id, user.email)
+                                    }
+                                    isLoggedIn = true
+                                    Toast.makeText(context, "Login successful", Toast.LENGTH_SHORT).show()
+                                }
                             } else {
                                 Toast.makeText(context, "Login failed: ${response.body()?.messageText ?: response.message()}", Toast.LENGTH_SHORT).show()
                             }
@@ -119,9 +127,21 @@ fun MainScreen(repository: PhotoRepository) {
                     Text("Login")
                 }
             } else {
-                Text("Dashboard", style = MaterialTheme.typography.headlineMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Dashboard", style = MaterialTheme.typography.headlineMedium)
+                    IconButton(onClick = {
+                        sessionManager.clearSession()
+                        isLoggedIn = false
+                    }) {
+                        Text("Logout", color = MaterialTheme.colorScheme.error)
+                    }
+                }
                 Spacer(modifier = Modifier.height(16.dp))
-                Button(onClick = { /* Implement full sync */ }) {
+                Button(modifier = Modifier.fillMaxWidth(), onClick = { /* Implement full sync */ }) {
                     Text("Sync Now (${photos.size} local photos)")
                 }
                 Spacer(modifier = Modifier.height(16.dp))
@@ -142,7 +162,12 @@ fun MainScreen(repository: PhotoRepository) {
                                 val scope = rememberCoroutineScope()
                                 Button(onClick = {
                                     scope.launch {
-                                        repository.syncPhoto(token, photo)
+                                        val success = repository.syncPhoto(photo)
+                                        if (success) {
+                                            Toast.makeText(context, "Uploaded ${photo.name}", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Upload failed ${photo.name}", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }) {
                                     Text("Upload")
