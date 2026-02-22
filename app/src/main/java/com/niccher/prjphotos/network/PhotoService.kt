@@ -17,11 +17,29 @@ interface PhotoService {
         @Field("device_name") deviceName: String = "Android Device"
     ): Response<AuthResponse>
 
-    @GET("explore")
-    suspend fun getPhotos(): Response<PhotoListResponse>
+    @GET("api/photos")
+    suspend fun getRemotePhotos(): Response<PhotoListResponse>
+
+    @GET("api/albums")
+    suspend fun getAlbums(): Response<com.niccher.prjphotos.models.AlbumListResponse>
+
+    @GET("api/memories")
+    suspend fun getMemories(): Response<PhotoListResponse>
+
+    @GET("api/favorites")
+    suspend fun getFavorites(): Response<PhotoListResponse>
+
+    @GET("api/archive")
+    suspend fun getArchived(): Response<PhotoListResponse>
+
+    @GET("api/trash")
+    suspend fun getTrash(): Response<PhotoListResponse>
+
+    @GET("api/explore")
+    suspend fun getExplore(): Response<PhotoListResponse>
 
     @Multipart
-    @POST("upload")
+    @POST("api/upload")
     suspend fun uploadPhoto(
         @Part file: MultipartBody.Part,
         @Part("description") description: RequestBody? = null
