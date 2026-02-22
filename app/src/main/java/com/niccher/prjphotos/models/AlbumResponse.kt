@@ -10,10 +10,10 @@ data class AlbumListResponse(
 
 @Serializable
 data class Album(
-    val id: Int,
-    val user_id: Int,
+    val id: String? = null,
+    val user_id: String? = null,
     val name: String,
     val description: String? = null,
     val cover_photo: String? = null,
-    val photo_count: Int = 0
+    val photo_count: String? = "0"
 )

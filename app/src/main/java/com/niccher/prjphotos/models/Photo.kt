@@ -4,20 +4,21 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class Photo(
-    val id: Int? = null,
-    val user_id: Int? = null,
+    val id: String? = null,
+    val user_id: String? = null,
     val filename: String,
     val path: String,
     val thumbnail_path: String? = null,
     val taken_at: String? = null,
-    val width: Int? = null,
-    val height: Int? = null,
-    val size: Long? = null,
+    val width: String? = null,
+    val height: String? = null,
+    val size: String? = null,
     val mime_type: String? = null,
-    val latitude: Double? = null,
-    val longitude: Double? = null,
-    val is_archived: Boolean = false,
-    val is_favorite: Boolean = false
+    val latitude: String? = null,
+    val longitude: String? = null,
+    val is_archived: String? = null,
+    val is_favorite: String? = null,
+    val is_deleted: String? = null
 )
 
 @Serializable

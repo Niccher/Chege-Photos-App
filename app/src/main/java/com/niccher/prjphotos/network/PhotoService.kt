@@ -23,6 +23,9 @@ interface PhotoService {
     @GET("api/albums")
     suspend fun getAlbums(): Response<com.niccher.prjphotos.models.AlbumListResponse>
 
+    @GET("api/albums/{albumId}/photos")
+    suspend fun getAlbumPhotos(@Path("albumId") albumId: String): Response<PhotoListResponse>
+
     @GET("api/memories")
     suspend fun getMemories(): Response<PhotoListResponse>
 
