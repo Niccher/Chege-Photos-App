@@ -33,8 +33,13 @@ class PhotoRepository(private val context: Context) {
         return photos
     }
 
-    suspend fun syncPhoto(file: File): Boolean {
-        val requestFile = file.asRequestBody("image/*".toMediaTypeOrNull())
+    suspend fun syncPhoto(file: File, onProgress: ((Float) -> Unit)? = null): Boolean {
+        val baseRequestBody = file.asRequestBody("image/*".toMediaTypeOrNull())
+        val requestFile = if (onProgress != null) {
+            com.niccher.prjphotos.utils.ProgressRequestBody(baseRequestBody, onProgress)
+        } else {
+            baseRequestBody
+        }
         val body = MultipartBody.Part.createFormData("file", file.name, requestFile)
         
         return try {

@@ -31,6 +31,7 @@ import com.niccher.prjphotos.network.ApiClient
 import com.niccher.prjphotos.repository.PhotoRepository
 import com.niccher.prjphotos.ui.theme.PrjPhotosTheme
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import retrofit2.Response
 import java.io.File
 
@@ -105,6 +106,52 @@ fun MainScreen(repository: PhotoRepository) {
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    
+    // Global Progress States for Persistence
+    val activeDownloads = remember { mutableStateMapOf<Long, String>() } // ID -> Photo Path
+    val downloadProgress = remember { mutableStateMapOf<String, Float>() } // Photo Path -> Progress
+    val downloadManager = remember { context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager }
+
+    LaunchedEffect(activeDownloads.size) {
+        if (activeDownloads.isEmpty()) return@LaunchedEffect
+        while (true) {
+            val ids = activeDownloads.keys.toList()
+            if (ids.isEmpty()) break
+            for (id in ids) {
+                val path = activeDownloads[id] ?: continue
+                val query = android.app.DownloadManager.Query().setFilterById(id)
+                val cursor = downloadManager.query(query)
+                if (cursor != null && cursor.moveToFirst()) {
+                    val statusCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_STATUS)
+                    val downloadedCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                    val totalCol = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                    
+                    if (statusCol != -1 && downloadedCol != -1 && totalCol != -1) {
+                        val status = cursor.getInt(statusCol)
+                        if (status == android.app.DownloadManager.STATUS_SUCCESSFUL || status == android.app.DownloadManager.STATUS_FAILED) {
+                            activeDownloads.remove(id)
+                            downloadProgress.remove(path)
+                        } else {
+                            val downloaded = cursor.getLong(downloadedCol)
+                            val total = cursor.getLong(totalCol)
+                            if (total > 0) {
+                                downloadProgress[path] = downloaded.toFloat() / total
+                            }
+                        }
+                    } else {
+                        activeDownloads.remove(id)
+                        downloadProgress.remove(path)
+                    }
+                    cursor.close()
+                } else {
+                    activeDownloads.remove(id)
+                    downloadProgress.remove(path)
+                    cursor?.close()
+                }
+            }
+            delay(500)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -191,13 +238,13 @@ fun MainScreen(repository: PhotoRepository) {
                 } else {
                     when (currentScreen) {
                         Screen.Sync -> SyncScreen(repository)
-                        Screen.Gallery -> GalleryScreen(serverUrl)
-                        Screen.Albums -> AlbumsScreen(serverUrl)
-                        SidebarItem.Memories -> RemotePhotoListScreen(serverUrl, "Memories") { ApiClient.getPhotoService(it).getMemories() }
-                        SidebarItem.Favorites -> RemotePhotoListScreen(serverUrl, "Favorites") { ApiClient.getPhotoService(it).getFavorites() }
-                        SidebarItem.Archive -> RemotePhotoListScreen(serverUrl, "Archive") { ApiClient.getPhotoService(it).getArchived() }
-                        SidebarItem.Trash -> RemotePhotoListScreen(serverUrl, "Trash") { ApiClient.getPhotoService(it).getTrash() }
-                        SidebarItem.Explore -> RemotePhotoListScreen(serverUrl, "Explore") { ApiClient.getPhotoService(it).getExplore() }
+                        Screen.Gallery -> GalleryScreen(serverUrl, activeDownloads, downloadProgress)
+                        Screen.Albums -> AlbumsScreen(serverUrl, activeDownloads, downloadProgress)
+                        SidebarItem.Memories -> RemotePhotoListScreen(serverUrl, "Memories", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getMemories() }
+                        SidebarItem.Favorites -> RemotePhotoListScreen(serverUrl, "Favorites", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getFavorites() }
+                        SidebarItem.Archive -> RemotePhotoListScreen(serverUrl, "Archive", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getArchived() }
+                        SidebarItem.Trash -> RemotePhotoListScreen(serverUrl, "Trash", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getTrash() }
+                        SidebarItem.Explore -> RemotePhotoListScreen(serverUrl, "Explore", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getExplore() }
                     }
                 }
             }
@@ -210,6 +257,8 @@ fun MainScreen(repository: PhotoRepository) {
 fun RemotePhotoListScreen(
     baseUrl: String, 
     title: String,
+    activeDownloads: MutableMap<Long, String>,
+    downloadProgress: MutableMap<String, Float>,
     fetchPhotos: suspend (Context) -> Response<PhotoListResponse>
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -264,6 +313,16 @@ fun RemotePhotoListScreen(
                                     .height(150.dp),
                                 contentScale = ContentScale.Crop
                             )
+                            
+                            // Download Progress Overlay for individual item
+                            downloadProgress[photo.path]?.let { progress ->
+                                LinearProgressIndicator(
+                                    progress = progress,
+                                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            
                             Row(
                                 modifier = Modifier.padding(8.dp).fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -283,12 +342,20 @@ fun RemotePhotoListScreen(
                                     )
                                 }
                                 IconButton(
-                                    onClick = { downloadRemotePhoto(context, baseUrl, photo) },
+                                    onClick = { 
+                                        val id = downloadRemotePhoto(context, baseUrl, photo)
+                                        if (id != null) {
+                                            activeDownloads[id] = photo.path
+                                            downloadProgress[photo.path] = 0f
+                                        }
+                                    },
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(Icons.Default.Download, contentDescription = "Download")
                                 }
                             }
+                            
+                            // Remove the hacky global progress check
                         }
                     }
                 }
@@ -314,13 +381,26 @@ fun RemotePhotoListScreen(
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
                     val photo = photos[page]
-                    AsyncImage(
-                        // Use full path for the full-screen view instead of thumbnail
-                        model = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/'),
-                        contentDescription = photo.filename,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AsyncImage(
+                            // Use full path for the full-screen view instead of thumbnail
+                            model = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/'),
+                            contentDescription = photo.filename,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                        
+                        // Fullscreen Download Progress
+                        downloadProgress[photo.path]?.let { progress ->
+                            LinearProgressIndicator(
+                                progress = progress,
+                                modifier = Modifier.fillMaxWidth()
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 80.dp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
 
                 // Top-Right Controls (Download + Close)
@@ -332,7 +412,13 @@ fun RemotePhotoListScreen(
                 ) {
                     val currentPhoto = photos[pagerState.currentPage]
                     IconButton(
-                        onClick = { downloadRemotePhoto(context, baseUrl, currentPhoto) }
+                        onClick = { 
+                            val id = downloadRemotePhoto(context, baseUrl, currentPhoto)
+                            if (id != null) {
+                                activeDownloads[id] = currentPhoto.path
+                                downloadProgress[currentPhoto.path] = 0f
+                            }
+                        }
                     ) {
                         Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White)
                     }
@@ -439,7 +525,10 @@ fun SyncScreen(repository: PhotoRepository) {
     }
 
     var isSyncing by remember { mutableStateOf(false) }
-    var syncProgress by remember { mutableStateOf(0) }
+    var syncOverallProgress by remember { mutableStateOf(0f) }
+    var currentFileProgress by remember { mutableStateOf(0f) }
+    var processedCount by remember { mutableStateOf(0) }
+    var currentlySyncingFile by remember { mutableStateOf<File?>(null) }
     
     // State for Fullscreen Carousel
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
@@ -451,21 +540,44 @@ fun SyncScreen(repository: PhotoRepository) {
             onClick = {
                 if (photos.isNotEmpty()) {
                     isSyncing = true
-                    syncProgress = 0
+                    processedCount = 0
+                    currentFileProgress = 0f
                     scope.launch {
                         for (photo in photos) {
-                            val success = repository.syncPhoto(photo)
-                            if (success) {
-                                syncProgress++
+                            currentlySyncingFile = photo
+                            val success = repository.syncPhoto(photo) { progress ->
+                                currentFileProgress = progress
                             }
+                            if (success) {
+                                processedCount++
+                            }
+                            currentFileProgress = 0f
+                            currentlySyncingFile = null
                         }
                         isSyncing = false
-                        Toast.makeText(context, "Synced $syncProgress out of ${photos.size} photos", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Synced $processedCount out of ${photos.size} photos", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
         ) {
-            Text(if (isSyncing) "Syncing... ($syncProgress/${photos.size})" else "Sync Now (${photos.size} local photos)")
+            Text(if (isSyncing) "Syncing... ($processedCount/${photos.size})" else "Sync Now (${photos.size} local photos)")
+        }
+
+        if (isSyncing) {
+            val overallProgress = if (photos.isNotEmpty()) (processedCount.toFloat() + currentFileProgress) / photos.size else 0f
+            Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                LinearProgressIndicator(
+                    progress = overallProgress,
+                    modifier = Modifier.fillMaxWidth().height(8.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                Text(
+                    text = "Overall Progress: ${(overallProgress * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
         }
 
         LazyVerticalGrid(
@@ -489,6 +601,18 @@ fun SyncScreen(repository: PhotoRepository) {
                                 .height(150.dp),
                             contentScale = ContentScale.Crop
                         )
+                        
+                        // Per-item Sync Progress
+                        if (currentlySyncingFile == photo || isSyncing && photo in photos.take(processedCount)) {
+                            val progress = if (currentlySyncingFile == photo) currentFileProgress else 1f
+                            LinearProgressIndicator(
+                                progress = progress,
+                                modifier = Modifier.fillMaxWidth().height(6.dp),
+                                color = if (progress < 1f) MaterialTheme.colorScheme.primary else Color.Green,
+                                strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                            )
+                        }
+
                         Row(
                             modifier = Modifier.padding(8.dp).fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -510,12 +634,17 @@ fun SyncScreen(repository: PhotoRepository) {
                                 onClick = {
                                     Toast.makeText(context, "Uploading ${photo.name}...", Toast.LENGTH_SHORT).show()
                                     scope.launch {
-                                        val success = repository.syncPhoto(photo)
+                                        currentlySyncingFile = photo
+                                        val success = repository.syncPhoto(photo) { progress ->
+                                            currentFileProgress = progress
+                                        }
                                         if (success) {
                                             Toast.makeText(context, "Uploaded ${photo.name}", Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(context, "Upload failed ${photo.name}", Toast.LENGTH_SHORT).show()
                                         }
+                                        currentlySyncingFile = null
+                                        currentFileProgress = 0f
                                     }
                                 },
                                 modifier = Modifier.size(24.dp)
@@ -604,12 +733,12 @@ fun SyncScreen(repository: PhotoRepository) {
 }
 
 @Composable
-fun GalleryScreen(baseUrl: String) {
-    RemotePhotoListScreen(baseUrl, "Gallery") { ApiClient.getPhotoService(it).getRemotePhotos() }
+fun GalleryScreen(baseUrl: String, activeDownloads: MutableMap<Long, String>, downloadProgress: MutableMap<String, Float>) {
+    RemotePhotoListScreen(baseUrl, "Gallery", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getRemotePhotos() }
 }
 
 @Composable
-fun AlbumsScreen(baseUrl: String) {
+fun AlbumsScreen(baseUrl: String, activeDownloads: MutableMap<Long, String>, downloadProgress: MutableMap<String, Float>) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var albums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -636,6 +765,8 @@ fun AlbumsScreen(baseUrl: String) {
             RemotePhotoListScreen(
                 baseUrl = baseUrl,
                 title = selectedAlbum!!.name,
+                activeDownloads = activeDownloads,
+                downloadProgress = downloadProgress,
                 fetchPhotos = { ApiClient.getPhotoService(it).getAlbumPhotos(selectedAlbum!!.id ?: "") }
             )
         }
@@ -692,7 +823,7 @@ fun formatSize(bytes: Long): String {
     return String.format(java.util.Locale.US, "%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
 }
 
-private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo) {
+private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo): Long? {
     try {
         val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
         val url = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/')
@@ -709,9 +840,11 @@ private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo)
             request.addRequestHeader("Authorization", "Bearer $token")
         }
 
-        downloadManager.enqueue(request)
+        val id = downloadManager.enqueue(request)
         Toast.makeText(context, "Download started...", Toast.LENGTH_SHORT).show()
+        return id
     } catch (e: Exception) {
         Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
+        return null
     }
 }
