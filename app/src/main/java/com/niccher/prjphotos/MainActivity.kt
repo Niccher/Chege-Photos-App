@@ -264,18 +264,30 @@ fun RemotePhotoListScreen(
                                     .height(150.dp),
                                 contentScale = ContentScale.Crop
                             )
-                            Column(modifier = Modifier.padding(8.dp)) {
-                                Text(
-                                    text = photo.filename.take(20) + if (photo.filename.length > 20) "..." else "",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1
-                                )
-                                val sizeBytes = photo.size?.toLongOrNull() ?: 0L
-                                Text(
-                                    text = formatSize(sizeBytes),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.Gray
-                                )
+                            Row(
+                                modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = photo.filename.take(20) + if (photo.filename.length > 20) "..." else "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1
+                                    )
+                                    val sizeBytes = photo.size?.toLongOrNull() ?: 0L
+                                    Text(
+                                        text = formatSize(sizeBytes),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.Gray
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { downloadRemotePhoto(context, baseUrl, photo) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = "Download")
+                                }
                             }
                         }
                     }
@@ -311,14 +323,22 @@ fun RemotePhotoListScreen(
                     )
                 }
 
-                // Close Button
-                IconButton(
-                    onClick = { selectedPhotoIndex = null },
+                // Top-Right Controls (Download + Close)
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(16.dp)
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    val currentPhoto = photos[pagerState.currentPage]
+                    IconButton(
+                        onClick = { downloadRemotePhoto(context, baseUrl, currentPhoto) }
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White)
+                    }
+                    IconButton(onClick = { selectedPhotoIndex = null }) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
                 }
 
                 // Info Overlay
@@ -670,4 +690,28 @@ fun formatSize(bytes: Long): String {
     val units = arrayOf("B", "KB", "MB", "GB", "TB")
     val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.toDouble())).toInt()
     return String.format(java.util.Locale.US, "%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+}
+
+private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo) {
+    try {
+        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+        val url = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/')
+        val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+            .setTitle(photo.filename)
+            .setDescription("Downloading photo...")
+            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_PICTURES, "Prj Photos/" + photo.filename)
+            .setAllowedOverMetered(true)
+            .setAllowedOverRoaming(true)
+
+        val sessionManager = com.niccher.prjphotos.utils.SessionManager(context)
+        sessionManager.getAuthToken()?.let { token ->
+            request.addRequestHeader("Authorization", "Bearer $token")
+        }
+
+        downloadManager.enqueue(request)
+        Toast.makeText(context, "Download started...", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
 }
