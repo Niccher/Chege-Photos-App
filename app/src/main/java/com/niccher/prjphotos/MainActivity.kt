@@ -34,6 +34,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import retrofit2.Response
 import java.io.File
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -49,14 +52,67 @@ import androidx.compose.foundation.background
 
 class MainActivity : ComponentActivity() {
     private lateinit var photoRepository: PhotoRepository
+    
+    val pendingSharedFiles = androidx.compose.runtime.mutableStateListOf<java.io.File>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         photoRepository = PhotoRepository(this)
+        
+        handleSharedContent(intent)
+        
         enableEdgeToEdge()
         setContent {
             PrjPhotosTheme {
-                MainScreen(photoRepository)
+                MainScreen(photoRepository, pendingSharedFiles)
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleSharedContent(intent)
+    }
+
+    private fun handleSharedContent(intent: android.content.Intent?) {
+        if (intent == null) return
+        val uris = mutableListOf<android.net.Uri>()
+        if (intent.action == android.content.Intent.ACTION_SEND) {
+            @Suppress("DEPRECATION")
+            val uri = intent.getParcelableExtra<android.net.Uri>(android.content.Intent.EXTRA_STREAM)
+            uri?.let { uris.add(it) }
+        } else if (intent.action == android.content.Intent.ACTION_SEND_MULTIPLE) {
+            @Suppress("DEPRECATION")
+            val list = intent.getParcelableArrayListExtra<android.net.Uri>(android.content.Intent.EXTRA_STREAM)
+            list?.let { uris.addAll(it) }
+        }
+
+        if (uris.isNotEmpty()) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                val sharedDir = java.io.File(cacheDir, "intent_shared")
+                if (!sharedDir.exists()) sharedDir.mkdirs()
+
+                val imported = mutableListOf<java.io.File>()
+                uris.forEach { uri ->
+                    try {
+                        contentResolver.openInputStream(uri)?.use { inputStream ->
+                            val tempFile = java.io.File(sharedDir, "shared_${System.currentTimeMillis()}_" + (uri.lastPathSegment?.replace("/", "_") ?: "img") + ".jpg")
+                            tempFile.outputStream().use { out ->
+                                inputStream.copyTo(out)
+                                imported.add(tempFile)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                
+                withContext(Dispatchers.Main) {
+                    if (imported.isNotEmpty()) {
+                        pendingSharedFiles.clear()
+                        pendingSharedFiles.addAll(imported)
+                    }
+                }
             }
         }
     }
@@ -78,7 +134,7 @@ enum class SidebarItem(val title: String, val icon: androidx.compose.ui.graphics
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(repository: PhotoRepository) {
+fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java.io.File> = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateListOf() }) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val sessionManager = remember { SessionManager(context) }
     val sharedPrefs = remember { context.getSharedPreferences("prj_photos_prefs", android.content.Context.MODE_PRIVATE) }
@@ -151,6 +207,10 @@ fun MainScreen(repository: PhotoRepository) {
             }
             delay(500)
         }
+    }
+
+    if (pendingSharedFiles.isNotEmpty()) {
+        SharedUploadDialog(files = pendingSharedFiles, repository = repository)
     }
 
     ModalNavigationDrawer(
@@ -522,6 +582,9 @@ fun SyncScreen(repository: PhotoRepository) {
 
     LaunchedEffect(Unit) {
         photos = repository.getLocalPhotos()
+        repository.photosRefreshTrigger.collect {
+            photos = repository.getLocalPhotos()
+        }
     }
 
     var isSyncing by remember { mutableStateOf(false) }
@@ -846,5 +909,94 @@ private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo)
     } catch (e: Exception) {
         Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
         return null
+    }
+}
+
+@Composable
+fun SharedUploadDialog(
+    files: MutableList<File>,
+    repository: PhotoRepository
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var isUploading by remember { mutableStateOf(false) }
+    var uploadedCount by remember { mutableStateOf(0) }
+    var currentFileProgress by remember { mutableStateOf(0f) }
+    val scope = rememberCoroutineScope()
+    
+    Dialog(
+        onDismissRequest = { if (!isUploading) files.clear() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Upload Shared Items", style = MaterialTheme.typography.headlineMedium)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Button(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        enabled = !isUploading,
+                        onClick = {
+                            isUploading = true
+                            uploadedCount = 0
+                            scope.launch {
+                                for (file in files) {
+                                    repository.syncPhoto(file) { progress ->
+                                        currentFileProgress = progress
+                                    }
+                                    uploadedCount++
+                                }
+                                Toast.makeText(context, "Uploaded $uploadedCount items", Toast.LENGTH_SHORT).show()
+                                files.forEach { it.delete() }
+                                files.clear()
+                            }
+                        }
+                    ) {
+                        Text(if (isUploading) "Uploading... ($uploadedCount/${files.size})" else "Upload All (${files.size} items)")
+                    }
+                    
+                    if (isUploading) {
+                        val overallProgress = if (files.isNotEmpty()) (uploadedCount.toFloat() + currentFileProgress) / files.size else 0f
+                        Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                            LinearProgressIndicator(
+                                progress = overallProgress,
+                                modifier = Modifier.fillMaxWidth().height(8.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                            )
+                        }
+                    }
+                    
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier.fillMaxSize().padding(top = 8.dp),
+                        contentPadding = PaddingValues(4.dp)
+                    ) {
+                        itemsIndexed(files) { _, file ->
+                            Card(modifier = Modifier.padding(4.dp).fillMaxWidth()) {
+                                AsyncImage(
+                                    model = file,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxWidth().height(150.dp),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                if (!isUploading) {
+                    IconButton(
+                        onClick = { 
+                            files.forEach { it.delete() }
+                            files.clear() 
+                        },
+                        modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                }
+            }
+        }
     }
 }

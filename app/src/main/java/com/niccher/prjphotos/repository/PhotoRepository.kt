@@ -12,6 +12,8 @@ import java.io.File
 
 class PhotoRepository(private val context: Context) {
 
+    val photosRefreshTrigger = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     fun getLocalPhotos(): List<File> {
         val photos = mutableListOf<File>()
         val projection = arrayOf(MediaStore.Images.Media.DATA)
@@ -27,9 +29,13 @@ class PhotoRepository(private val context: Context) {
             val dataColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
             while (it.moveToNext()) {
                 val path = it.getString(dataColumn)
-                photos.add(File(path))
+                if (path != null) {
+                    val file = File(path)
+                    if (file.exists()) photos.add(file)
+                }
             }
         }
+        
         return photos
     }
 
