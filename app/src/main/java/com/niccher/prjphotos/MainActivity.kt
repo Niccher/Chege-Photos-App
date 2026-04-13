@@ -4,10 +4,12 @@ import android.Manifest
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.fragment.app.FragmentActivity
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 import com.niccher.prjphotos.models.Album as PhotoAlbum
 import com.niccher.prjphotos.models.PhotoListResponse
 import com.niccher.prjphotos.utils.SessionManager
@@ -47,10 +51,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private lateinit var photoRepository: PhotoRepository
     
     val pendingSharedFiles = androidx.compose.runtime.mutableStateListOf<java.io.File>()
@@ -125,6 +128,7 @@ enum class Screen(val title: String, val icon: androidx.compose.ui.graphics.vect
 }
 
 enum class SidebarItem(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    Profile("Profile", Icons.Default.Person),
     Memories("Memories", Icons.Default.AutoAwesome),
     Favorites("Favorites", Icons.Default.Favorite),
     Archive("Archive", Icons.Default.Archive),
@@ -145,6 +149,35 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
     
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+
+    var isUnlocked by remember { mutableStateOf(!sessionManager.isBiometricEnabled() || !isLoggedIn) }
+
+    if (!isUnlocked && isLoggedIn) {
+        Box(modifier = Modifier.fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .clickable(enabled = true, onClick = {}), // Block touch events from passing through
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.Lock, contentDescription = "Locked", modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(onClick = {
+                    showBiometricPrompt(context as FragmentActivity) { success ->
+                        if (success) isUnlocked = true
+                    }
+                }) {
+                    Text("Unlock with Biometrics")
+                }
+            }
+        }
+        
+        LaunchedEffect(Unit) {
+            showBiometricPrompt(context as FragmentActivity) { success ->
+                if (success) isUnlocked = true
+            }
+        }
+        return // Stop rendering anything else if locked
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -209,6 +242,30 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
         }
     }
 
+    var showLogoutDialog by remember { mutableStateOf(false) }
+
+    if (showLogoutDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogoutDialog = false },
+            title = { Text("Confirm Logout") },
+            text = { Text("Are you sure you want to log out?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLogoutDialog = false
+                    sessionManager.clearSession()
+                    isLoggedIn = false
+                }) {
+                    Text("Logout", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     if (pendingSharedFiles.isNotEmpty()) {
         SharedUploadDialog(files = pendingSharedFiles, repository = repository)
     }
@@ -247,10 +304,7 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
                             }
                         },
                         actions = {
-                            IconButton(onClick = {
-                                sessionManager.clearSession()
-                                isLoggedIn = false
-                            }) {
+                            IconButton(onClick = { showLogoutDialog = true }) {
                                 Icon(Icons.Default.Logout, contentDescription = "Logout", tint = MaterialTheme.colorScheme.error)
                             }
                         }
@@ -297,6 +351,7 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
                     )
                 } else {
                     when (currentScreen) {
+                        SidebarItem.Profile -> ProfileScreen(sessionManager)
                         Screen.Sync -> SyncScreen(repository)
                         Screen.Gallery -> GalleryScreen(serverUrl, activeDownloads, downloadProgress)
                         Screen.Albums -> AlbumsScreen(serverUrl, activeDownloads, downloadProgress)
@@ -551,7 +606,8 @@ fun LoginScreen(
                         authData?.access_token?.let {
                             sessionManager.saveAuthToken(it)
                             authData.user?.let { user ->
-                                sessionManager.saveUserProfile(user.id, user.email)
+                                sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
+                                sessionManager.updateLastLogin()
                             }
                             onLogin()
                             Toast.makeText(context, "Login successful", Toast.LENGTH_SHORT).show()
@@ -577,6 +633,7 @@ fun DashboardHeader(title: String, onLogout: () -> Unit) {
 @Composable
 fun SyncScreen(repository: PhotoRepository) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val sessionManager = remember { SessionManager(context) }
     var photos by remember { mutableStateOf(listOf<File>()) }
     val scope = rememberCoroutineScope()
 
@@ -613,6 +670,7 @@ fun SyncScreen(repository: PhotoRepository) {
                             }
                             if (success) {
                                 processedCount++
+                                sessionManager.updateLastUpload()
                             }
                             currentFileProgress = 0f
                             currentlySyncingFile = null
@@ -702,6 +760,7 @@ fun SyncScreen(repository: PhotoRepository) {
                                             currentFileProgress = progress
                                         }
                                         if (success) {
+                                            sessionManager.updateLastUpload()
                                             Toast.makeText(context, "Uploaded ${photo.name}", Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(context, "Upload failed ${photo.name}", Toast.LENGTH_SHORT).show()
@@ -761,6 +820,7 @@ fun SyncScreen(repository: PhotoRepository) {
                             scope.launch {
                                 val success = repository.syncPhoto(currentPhoto)
                                 if (success) {
+                                    sessionManager.updateLastUpload()
                                     Toast.makeText(context, "Uploaded ${currentPhoto.name}", Toast.LENGTH_SHORT).show()
                                 } else {
                                     Toast.makeText(context, "Upload failed ${currentPhoto.name}", Toast.LENGTH_SHORT).show()
@@ -918,6 +978,7 @@ fun SharedUploadDialog(
     repository: PhotoRepository
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val sessionManager = remember { SessionManager(context) }
     var isUploading by remember { mutableStateOf(false) }
     var uploadedCount by remember { mutableStateOf(0) }
     var currentFileProgress by remember { mutableStateOf(0f) }
@@ -941,10 +1002,13 @@ fun SharedUploadDialog(
                             uploadedCount = 0
                             scope.launch {
                                 for (file in files) {
-                                    repository.syncPhoto(file) { progress ->
+                                    val success = repository.syncPhoto(file) { progress ->
                                         currentFileProgress = progress
                                     }
-                                    uploadedCount++
+                                    if (success) {
+                                        uploadedCount++
+                                        sessionManager.updateLastUpload()
+                                    }
                                 }
                                 Toast.makeText(context, "Uploaded $uploadedCount items", Toast.LENGTH_SHORT).show()
                                 files.forEach { it.delete() }
@@ -998,5 +1062,93 @@ fun SharedUploadDialog(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun ProfileScreen(sessionManager: com.niccher.prjphotos.utils.SessionManager) {
+    val context = LocalContext.current
+    val userDetails = remember { sessionManager.getUserDetails() }
+    
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(Icons.Default.Person, contentDescription = "Profile", modifier = Modifier.size(100.dp), tint = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(text = userDetails["username"] ?: "Unknown", style = MaterialTheme.typography.headlineMedium)
+        Text(text = userDetails["email"] ?: "Unknown", style = MaterialTheme.typography.bodyLarge, color = Color.Gray)
+        
+        Spacer(modifier = Modifier.height(32.dp))
+        
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                ProfileRow("Account Created", userDetails["created"] ?: "Unknown")
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                ProfileRow("Last Login", userDetails["last_login"] ?: "Unknown")
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                ProfileRow("Last Upload", userDetails["last_upload"] ?: "Unknown")
+                
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), 
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "Biometric Lock", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    var checked by remember { mutableStateOf(sessionManager.isBiometricEnabled()) }
+                    Switch(
+                        checked = checked,
+                        onCheckedChange = { 
+                            if (it) {
+                                showBiometricPrompt(context as FragmentActivity) { success ->
+                                    if (success) {
+                                        sessionManager.setBiometricEnabled(true)
+                                        checked = true
+                                    }
+                                }
+                            } else {
+                                sessionManager.setBiometricEnabled(false)
+                                checked = false
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+fun showBiometricPrompt(activity: FragmentActivity, onResult: (Boolean) -> Unit) {
+    val executor = ContextCompat.getMainExecutor(activity)
+    val biometricPrompt = BiometricPrompt(activity, executor,
+        object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                super.onAuthenticationSucceeded(result)
+                onResult(true)
+            }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                super.onAuthenticationError(errorCode, errString)
+                onResult(false)
+            }
+            override fun onAuthenticationFailed() {
+                super.onAuthenticationFailed()
+                onResult(false)
+            }
+        })
+
+    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+        .setTitle("Biometric login for PrjPhotos")
+        .setSubtitle("Log in using your biometric credential")
+        .setNegativeButtonText("Cancel")
+        .build()
+
+    biometricPrompt.authenticate(promptInfo)
+}
+
+@Composable
+fun ProfileRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(text = label, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+        Text(text = value, color = Color.Gray)
     }
 }

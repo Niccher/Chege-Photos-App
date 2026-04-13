@@ -24,5 +24,7 @@ data class AuthResponse(
 data class UserInfo(
     val id: Int,
     val email: String,
-    val username: String? = null
+    val username: String? = null,
+    val created_at: String? = null,
+    val last_upload: String? = null
 )
