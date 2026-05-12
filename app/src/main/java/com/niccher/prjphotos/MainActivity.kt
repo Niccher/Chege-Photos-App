@@ -7,6 +7,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import android.os.Build
 import android.os.Bundle
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -40,6 +44,8 @@ import com.niccher.prjphotos.models.Photo
 import com.niccher.prjphotos.network.ApiClient
 import com.niccher.prjphotos.repository.PhotoRepository
 import com.niccher.prjphotos.ui.theme.PrjPhotosTheme
+import com.niccher.prjphotos.ui.theme.AppTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import retrofit2.Response
@@ -52,6 +58,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -62,6 +69,9 @@ import androidx.compose.foundation.background
 class MainActivity : FragmentActivity() {
     private lateinit var photoRepository: PhotoRepository
     
+    // Global Theme State
+    private var selectedTheme = mutableStateOf(com.niccher.prjphotos.ui.theme.AppTheme.DEFAULT)
+
     val pendingSharedFiles = androidx.compose.runtime.mutableStateListOf<java.io.File>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,10 +80,15 @@ class MainActivity : FragmentActivity() {
         
         handleSharedContent(intent)
         
+        createNotificationChannel()
+        
+        val sessionManager = SessionManager(this)
+        selectedTheme.value = com.niccher.prjphotos.ui.theme.AppTheme.valueOf(sessionManager.getTheme())
+
         enableEdgeToEdge()
         setContent {
-            PrjPhotosTheme {
-                MainScreen(photoRepository, pendingSharedFiles)
+            PrjPhotosTheme(appTheme = selectedTheme.value) {
+                MainScreen(photoRepository, pendingSharedFiles, selectedTheme)
             }
         }
     }
@@ -81,6 +96,20 @@ class MainActivity : FragmentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         handleSharedContent(intent)
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val name = "File Transfers"
+            val descriptionText = "Notifications for photo uploads and downloads"
+            val importance = NotificationManager.IMPORTANCE_LOW
+            val channel = NotificationChannel("file_transfer_channel", name, importance).apply {
+                description = descriptionText
+            }
+            val notificationManager: NotificationManager =
+                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+        }
     }
 
     private fun handleSharedContent(intent: android.content.Intent?) {
@@ -139,12 +168,17 @@ enum class SidebarItem(val title: String, val icon: androidx.compose.ui.graphics
     Favorites("Favorites", Icons.Default.Favorite),
     Archive("Archive", Icons.Default.Archive),
     Trash("Trash", Icons.Default.Delete),
-    Explore("Explore", Icons.Default.Explore)
+    Explore("Explore", Icons.Default.Explore),
+    Theme("Theme", Icons.Default.Palette)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java.io.File> = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateListOf() }) {
+fun MainScreen(
+    repository: PhotoRepository, 
+    pendingSharedFiles: MutableList<java.io.File> = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateListOf() },
+    themeState: MutableState<com.niccher.prjphotos.ui.theme.AppTheme>
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val sessionManager = remember { SessionManager(context) }
     val sharedPrefs = remember { context.getSharedPreferences("prj_photos_prefs", android.content.Context.MODE_PRIVATE) }
@@ -152,7 +186,8 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
     var serverUrl by remember { mutableStateOf(sharedPrefs.getString("server_url", "https://photos.chegecache.co.ke/") ?: "") }
     var isLoggedIn by remember { mutableStateOf(sessionManager.isLoggedIn()) }
     var currentScreen by remember { mutableStateOf<Any>(Screen.Sync) }
-    
+    var showThemeDialog by remember { mutableStateOf(false) }
+
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
@@ -192,7 +227,11 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
     LaunchedEffect(Unit) {
         ApiClient.updateBaseUrl(serverUrl, context)
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+            arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES, 
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.POST_NOTIFICATIONS
+            )
         } else {
             arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
@@ -255,6 +294,18 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
 
     var showLogoutDialog by remember { mutableStateOf(false) }
 
+    if (showThemeDialog) {
+        ThemeSettingsDialog(
+            currentTheme = themeState.value,
+            onThemeSelected = { newTheme ->
+                themeState.value = newTheme
+                sessionManager.saveTheme(newTheme.name)
+                showThemeDialog = false
+            },
+            onDismiss = { showThemeDialog = false }
+        )
+    }
+
     if (showLogoutDialog) {
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
@@ -308,12 +359,16 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
 
                 // Tools Section
                 Text("Tools", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
-                listOf(SidebarItem.Archive, SidebarItem.Trash).forEach { item ->
+                listOf(SidebarItem.Archive, SidebarItem.Trash, SidebarItem.Theme).forEach { item ->
                     NavigationDrawerItem(
                         label = { Text(item.title) },
                         selected = currentScreen == item,
                         onClick = {
-                            currentScreen = item
+                            if (item == SidebarItem.Theme) {
+                                showThemeDialog = true
+                            } else {
+                                currentScreen = item
+                            }
                             scope.launch { drawerState.close() }
                         },
                         icon = { Icon(item.icon, contentDescription = item.title) },
@@ -1101,8 +1156,8 @@ private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo)
         val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
         val url = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/')
         val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
-            .setTitle(photo.filename)
-            .setDescription("Downloading photo...")
+            .setTitle("Prj Photos: Downloading")
+            .setDescription(photo.filename)
             .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_PICTURES, "Prj Photos/" + photo.filename)
             .setAllowedOverMetered(true)
@@ -1119,6 +1174,30 @@ private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo)
     } catch (e: Exception) {
         Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
         return null
+    }
+}
+
+fun showUploadNotification(context: Context, current: Int, total: Int, isFinished: Boolean = false) {
+    val notificationManager = NotificationManagerCompat.from(context)
+    val builder = NotificationCompat.Builder(context, "file_transfer_channel")
+        .setSmallIcon(R.mipmap.ic_launcher)
+        .setContentTitle(if (isFinished) "Prj Photos: Upload Done" else "Prj Photos: Uploading...")
+        .setPriority(NotificationCompat.PRIORITY_LOW)
+        .setOngoing(!isFinished)
+        .setOnlyAlertOnce(true)
+
+    if (isFinished) {
+        builder.setContentText("Successfully synced $total items to gallery")
+            .setProgress(0, 0, false)
+    } else {
+        builder.setContentText("Syncing $current of $total items...")
+            .setProgress(total, current, false)
+    }
+
+    try {
+        notificationManager.notify(1001, builder.build())
+    } catch (e: SecurityException) {
+        // Handle missing permission gracefully
     }
 }
 
@@ -1150,8 +1229,10 @@ fun SharedUploadDialog(
                         onClick = {
                             isUploading = true
                             uploadedCount = 0
+                            showUploadNotification(context, 0, files.size)
                             scope.launch {
-                                for (file in files) {
+                                for ((index, file) in files.withIndex()) {
+                                    showUploadNotification(context, index + 1, files.size)
                                     val success = repository.syncPhoto(file) { progress ->
                                         currentFileProgress = progress
                                     }
@@ -1160,6 +1241,7 @@ fun SharedUploadDialog(
                                         sessionManager.updateLastUpload()
                                     }
                                 }
+                                showUploadNotification(context, uploadedCount, files.size, isFinished = true)
                                 Toast.makeText(context, "Uploaded $uploadedCount items", Toast.LENGTH_SHORT).show()
                                 files.forEach { it.delete() }
                                 files.clear()
@@ -1300,5 +1382,115 @@ fun ProfileRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(text = label, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
         Text(text = value, color = Color.Gray)
+    }
+}
+@Composable
+fun ThemeSettingsDialog(
+    currentTheme: AppTheme,
+    onThemeSelected: (AppTheme) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Switch Atmosphere", 
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Choose a style that fits your mood",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                AppTheme.values().forEach { theme ->
+                    ThemeOption(
+                        theme = theme,
+                        isSelected = theme == currentTheme,
+                        onClick = { onThemeSelected(theme) }
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ThemeOption(
+    theme: AppTheme,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val backgroundColor = when (theme) {
+        AppTheme.DEFAULT -> MaterialTheme.colorScheme.primaryContainer
+        AppTheme.SOLARIZED -> Color(0xFFFDF6E3)
+        AppTheme.GREY -> Color(0xFF263238)
+        AppTheme.MIDNIGHT -> Color(0xFF1A237E)
+        AppTheme.BLACK -> Color(0xFF000000)
+    }
+    
+    val textColor = when (theme) {
+        AppTheme.SOLARIZED -> Color(0xFF657B83)
+        AppTheme.DEFAULT -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> Color.White
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(16.dp),
+        color = if (isSelected) backgroundColor else backgroundColor.copy(alpha = 0.3f),
+        border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text(
+                    text = theme.name.lowercase().replaceFirstChar { it.uppercase() },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (isSelected) textColor else MaterialTheme.colorScheme.onSurface
+                )
+                if (isSelected) {
+                    Text(
+                        text = "Active",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textColor.copy(alpha = 0.7f)
+                    )
+                }
+            }
+            if (isSelected) {
+                Icon(
+                    Icons.Default.CheckCircle, 
+                    contentDescription = "Selected",
+                    tint = textColor
+                )
+            }
+        }
     }
 }

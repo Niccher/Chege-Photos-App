@@ -16,6 +16,15 @@ class SessionManager(context: Context) {
         private const val KEY_LAST_LOGIN = "last_login"
         private const val KEY_LAST_UPLOAD = "last_upload"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
+        private const val KEY_APP_THEME = "app_theme"
+    }
+
+    fun saveTheme(theme: String) {
+        prefs.edit().putString(KEY_APP_THEME, theme).apply()
+    }
+
+    fun getTheme(): String {
+        return prefs.getString(KEY_APP_THEME, "DEFAULT") ?: "DEFAULT"
     }
 
     fun saveAuthToken(token: String) {
