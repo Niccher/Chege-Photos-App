@@ -1,6 +1,10 @@
 package com.niccher.prjphotos
 
 import android.Manifest
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -13,7 +17,9 @@ import androidx.core.content.ContextCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -195,6 +201,11 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    // Ensure drawer is closed on startup to prevent auto-opening due to state restoration
+    LaunchedEffect(Unit) {
+        drawerState.close()
+    }
     
     // Global Progress States for Persistence
     val activeDownloads = remember { mutableStateMapOf<Long, String>() } // ID -> Photo Path
@@ -274,10 +285,47 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
         drawerState = drawerState,
         gesturesEnabled = isLoggedIn,
         drawerContent = {
-            ModalDrawerSheet {
+            ModalDrawerSheet(
+                modifier = Modifier.width(300.dp)
+            ) {
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("Management", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
-                SidebarItem.values().forEach { item ->
+                // Library Section
+                Text("Library", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
+                listOf(SidebarItem.Explore, SidebarItem.Memories, SidebarItem.Favorites).forEach { item ->
+                    NavigationDrawerItem(
+                        label = { Text(item.title) },
+                        selected = currentScreen == item,
+                        onClick = {
+                            currentScreen = item
+                            scope.launch { drawerState.close() }
+                        },
+                        icon = { Icon(item.icon, contentDescription = item.title) },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                // Tools Section
+                Text("Tools", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
+                listOf(SidebarItem.Archive, SidebarItem.Trash).forEach { item ->
+                    NavigationDrawerItem(
+                        label = { Text(item.title) },
+                        selected = currentScreen == item,
+                        onClick = {
+                            currentScreen = item
+                            scope.launch { drawerState.close() }
+                        },
+                        icon = { Icon(item.icon, contentDescription = item.title) },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                // Account Section
+                Text("Account", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
+                listOf(SidebarItem.Profile).forEach { item ->
                     NavigationDrawerItem(
                         label = { Text(item.title) },
                         selected = currentScreen == item,
@@ -367,7 +415,7 @@ fun MainScreen(repository: PhotoRepository, pendingSharedFiles: MutableList<java
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun RemotePhotoListScreen(
     baseUrl: String, 
@@ -379,6 +427,10 @@ fun RemotePhotoListScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     var photos by remember { mutableStateOf(listOf<Photo>()) }
     var isLoading by remember { mutableStateOf(true) }
+    
+    // Search and Filter States
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedType by remember { mutableStateOf<String?>(null) } // null = All, "jpg", "png", "mp4"
     
     // State for Fullscreen Carousel
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
@@ -397,80 +449,152 @@ fun RemotePhotoListScreen(
         }
     }
 
-    if (isLoading) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+    val filteredPhotos = remember(photos, searchQuery, selectedType) {
+        photos.filter { photo ->
+            val matchesQuery = photo.filename.contains(searchQuery, ignoreCase = true)
+            val matchesType = when (selectedType) {
+                null -> true
+                "jpg" -> photo.filename.endsWith(".jpg", ignoreCase = true) || photo.filename.endsWith(".jpeg", ignoreCase = true)
+                "png" -> photo.filename.endsWith(".png", ignoreCase = true)
+                "mp4" -> photo.filename.endsWith(".mp4", ignoreCase = true) || photo.filename.endsWith(".mov", ignoreCase = true)
+                else -> true
+            }
+            matchesQuery && matchesType
         }
-    } else {
-        if (photos.isEmpty()) {
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Search and Filter UI
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search photos...") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear")
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = MaterialTheme.shapes.medium
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val types = listOf(null, "jpg", "png", "mp4")
+                items(types) { type ->
+                    FilterChip(
+                        selected = selectedType == type,
+                        onClick = { selectedType = type },
+                        label = { Text(type?.uppercase() ?: "All") },
+                        leadingIcon = if (selectedType == type) {
+                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        } else null
+                    )
+                }
+            }
+        }
+
+        if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No photos found in $title")
+                CircularProgressIndicator()
             }
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(4.dp)
-            ) {
-                itemsIndexed(photos) { index, photo ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(4.dp)
-                            .clickable { selectedPhotoIndex = index }
-                    ) {
-                        Column {
-                            AsyncImage(
-                                model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path?.trimStart('/') ?: ""),
-                                contentDescription = photo.filename,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(150.dp),
-                                contentScale = ContentScale.Crop
-                            )
-                            
-                            // Download Progress Overlay for individual item
-                            downloadProgress[photo.path]?.let { progress ->
-                                LinearProgressIndicator(
-                                    progress = progress,
-                                    modifier = Modifier.fillMaxWidth().height(4.dp),
-                                    color = MaterialTheme.colorScheme.primary
+            if (filteredPhotos.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.SearchOff, 
+                            contentDescription = null, 
+                            modifier = Modifier.size(64.dp),
+                            tint = Color.Gray
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = if (photos.isEmpty()) "No photos found in $title" else "No photos match your search",
+                            color = Color.Gray
+                        )
+                    }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize().weight(1f),
+                    contentPadding = PaddingValues(4.dp)
+                ) {
+                    itemsIndexed(filteredPhotos) { index, photo ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(4.dp)
+                                .clickable { 
+                                    // Find index in original photos list for carousel consistency if needed, 
+                                    // but here we use index in filtered list for carousel
+                                    selectedPhotoIndex = index 
+                                }
+                        ) {
+                            Column {
+                                AsyncImage(
+                                    model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path?.trimStart('/') ?: ""),
+                                    contentDescription = photo.filename,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(150.dp),
+                                    contentScale = ContentScale.Crop
                                 )
-                            }
-                            
-                            Row(
-                                modifier = Modifier.padding(8.dp).fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = photo.filename.take(20) + if (photo.filename.length > 20) "..." else "",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1
-                                    )
-                                    val sizeBytes = photo.size?.toLongOrNull() ?: 0L
-                                    Text(
-                                        text = formatSize(sizeBytes),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color.Gray
+                                
+                                downloadProgress[photo.path]?.let { progress ->
+                                    LinearProgressIndicator(
+                                        progress = progress,
+                                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                                        color = MaterialTheme.colorScheme.primary
                                     )
                                 }
-                                IconButton(
-                                    onClick = { 
-                                        val id = downloadRemotePhoto(context, baseUrl, photo)
-                                        if (id != null) {
-                                            activeDownloads[id] = photo.path
-                                            downloadProgress[photo.path] = 0f
-                                        }
-                                    },
-                                    modifier = Modifier.size(24.dp)
+                                
+                                Row(
+                                    modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(Icons.Default.Download, contentDescription = "Download")
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = photo.filename.take(20) + if (photo.filename.length > 20) "..." else "",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1
+                                        )
+                                        val sizeBytes = photo.size?.toLongOrNull() ?: 0L
+                                        Text(
+                                            text = formatSize(sizeBytes),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { 
+                                            val id = downloadRemotePhoto(context, baseUrl, photo)
+                                            if (id != null) {
+                                                activeDownloads[id] = photo.path
+                                                downloadProgress[photo.path] = 0f
+                                            }
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.Download, contentDescription = "Download")
+                                    }
                                 }
                             }
-                            
-                            // Remove the hacky global progress check
                         }
                     }
                 }
@@ -478,7 +602,7 @@ fun RemotePhotoListScreen(
         }
     }
 
-    // Fullscreen Image Carousel Dialog
+    // Fullscreen Image Carousel Dialog (updated to use filteredPhotos)
     selectedPhotoIndex?.let { initialPage ->
         Dialog(
             onDismissRequest = { selectedPhotoIndex = null },
@@ -489,23 +613,52 @@ fun RemotePhotoListScreen(
                     .fillMaxSize()
                     .background(Color.Black)
             ) {
-                val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { photos.size })
+                val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { filteredPhotos.size })
 
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
-                    val photo = photos[page]
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    val photo = filteredPhotos[page]
+                    
+                    // Zoom and Pan States
+                    var scale by remember { mutableStateOf(1f) }
+                    var offset by remember { mutableStateOf(Offset.Zero) }
+
+                    // Reset zoom when the user swipes to a different page
+                    LaunchedEffect(pagerState.currentPage) {
+                        scale = 1f
+                        offset = Offset.Zero
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    scale = (scale * zoom).coerceIn(1f, 5f)
+                                    if (scale > 1f) {
+                                        offset += pan
+                                    } else {
+                                        offset = Offset.Zero
+                                    }
+                                }
+                            }
+                    ) {
                         AsyncImage(
-                            // Use full path for the full-screen view instead of thumbnail
                             model = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/'),
                             contentDescription = photo.filename,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer(
+                                    scaleX = scale,
+                                    scaleY = scale,
+                                    translationX = offset.x,
+                                    translationY = offset.y
+                                ),
                             contentScale = ContentScale.Fit
                         )
                         
-                        // Fullscreen Download Progress
                         downloadProgress[photo.path]?.let { progress ->
                             LinearProgressIndicator(
                                 progress = progress,
@@ -518,14 +671,14 @@ fun RemotePhotoListScreen(
                     }
                 }
 
-                // Top-Right Controls (Download + Close)
+                // Top-Right Controls
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(16.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    val currentPhoto = photos[pagerState.currentPage]
+                    val currentPhoto = filteredPhotos[pagerState.currentPage]
                     IconButton(
                         onClick = { 
                             val id = downloadRemotePhoto(context, baseUrl, currentPhoto)
@@ -543,7 +696,7 @@ fun RemotePhotoListScreen(
                 }
 
                 // Info Overlay
-                val currentPhoto = photos[pagerState.currentPage]
+                val currentPhoto = filteredPhotos[pagerState.currentPage]
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -556,9 +709,6 @@ fun RemotePhotoListScreen(
                     Text(text = "Size: ${formatSize(sizeBytes)}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                     if (currentPhoto.width != null && currentPhoto.height != null) {
                         Text(text = "Dimensions: ${currentPhoto.width} x ${currentPhoto.height}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (currentPhoto.taken_at != null) {
-                        Text(text = "Date: ${currentPhoto.taken_at}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
