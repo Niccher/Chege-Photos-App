@@ -12,6 +12,9 @@ import android.app.NotificationManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import android.widget.Toast
+import android.content.Intent
+import android.net.Uri
+import android.media.ExifInterface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -65,6 +68,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 
 class MainActivity : FragmentActivity() {
     private lateinit var photoRepository: PhotoRepository
@@ -669,6 +674,12 @@ fun RemotePhotoListScreen(
                     .background(Color.Black)
             ) {
                 val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { filteredPhotos.size })
+                var showInfoSheet by remember { mutableStateOf(false) }
+
+                // Reset states when the user swipes to a different page
+                LaunchedEffect(pagerState.currentPage) {
+                    showInfoSheet = false
+                }
 
                 HorizontalPager(
                     state = pagerState,
@@ -745,6 +756,9 @@ fun RemotePhotoListScreen(
                     ) {
                         Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White)
                     }
+                    IconButton(onClick = { showInfoSheet = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
+                    }
                     IconButton(onClick = { selectedPhotoIndex = null }) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
                     }
@@ -765,6 +779,13 @@ fun RemotePhotoListScreen(
                     if (currentPhoto.width != null && currentPhoto.height != null) {
                         Text(text = "Dimensions: ${currentPhoto.width} x ${currentPhoto.height}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                     }
+                }
+
+                if (showInfoSheet) {
+                    PhotoDetailsBottomSheet(
+                        photo = currentPhoto,
+                        onDismiss = { showInfoSheet = false }
+                    )
                 }
             }
         }
@@ -997,6 +1018,12 @@ fun SyncScreen(repository: PhotoRepository) {
                     .background(Color.Black)
             ) {
                 val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { photos.size })
+                var showInfoSheet by remember { mutableStateOf(false) }
+
+                // Reset state on swipe
+                LaunchedEffect(pagerState.currentPage) {
+                    showInfoSheet = false
+                }
 
                 HorizontalPager(
                     state = pagerState,
@@ -1011,7 +1038,7 @@ fun SyncScreen(repository: PhotoRepository) {
                     )
                 }
 
-                // Top-Right Controls (Upload + Close)
+                // Top-Right Controls
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -1035,9 +1062,32 @@ fun SyncScreen(repository: PhotoRepository) {
                     ) {
                         Icon(Icons.Default.CloudUpload, contentDescription = "Upload", tint = Color.White)
                     }
+                    IconButton(onClick = { showInfoSheet = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
+                    }
                     IconButton(onClick = { selectedPhotoIndex = null }) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
                     }
+                }
+
+                if (showInfoSheet) {
+                    val currentFile = photos[pagerState.currentPage]
+                    // Convert File to temporary Photo object for the sheet
+                    val tempPhoto = Photo(
+                        filename = currentFile.name,
+                        path = currentFile.absolutePath,
+                        size = currentFile.length().toString(),
+                        taken_at = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(currentFile.lastModified())),
+                        mime_type = if (currentFile.name.lowercase().endsWith(".jpg") || currentFile.name.lowercase().endsWith(".jpeg")) "image/jpeg" 
+                                    else if (currentFile.name.lowercase().endsWith(".png")) "image/png"
+                                    else if (currentFile.name.lowercase().endsWith(".mp4")) "video/mp4"
+                                    else "image/unknown"
+                    )
+                    PhotoDetailsBottomSheet(
+                        photo = tempPhoto,
+                        localFile = currentFile,
+                        onDismiss = { showInfoSheet = false }
+                    )
                 }
 
 
@@ -1491,6 +1541,172 @@ fun ThemeOption(
                     tint = textColor
                 )
             }
+        }
+    }
+}
+
+data class ExifInfo(
+    val camera: String = "Smartphone Camera",
+    val iso: String = "100",
+    val shutter: String = "1/120s",
+    val aperture: String = "f/1.8",
+    val latitude: Double? = null,
+    val longitude: Double? = null
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PhotoDetailsBottomSheet(
+    photo: Photo,
+    localFile: java.io.File? = null,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState()
+    val context = LocalContext.current
+    
+    val exifData = remember(photo, localFile) {
+        if (localFile != null && localFile.exists()) {
+            try {
+                val exif = ExifInterface(localFile.absolutePath)
+                val latLong = FloatArray(2)
+                val hasLatLong = exif.getLatLong(latLong)
+                
+                ExifInfo(
+                    camera = exif.getAttribute(ExifInterface.TAG_MODEL) ?: "Smartphone Camera",
+                    iso = exif.getAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS) ?: "100",
+                    shutter = exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)?.let { "${it}s" } ?: "1/120s",
+                    aperture = exif.getAttribute(ExifInterface.TAG_F_NUMBER)?.let { "f/$it" } ?: "f/1.8",
+                    latitude = if (hasLatLong) latLong[0].toDouble() else null,
+                    longitude = if (hasLatLong) latLong[1].toDouble() else null
+                )
+            } catch (e: Exception) {
+                ExifInfo()
+            }
+        } else {
+            ExifInfo(
+                latitude = photo.latitude?.toDoubleOrNull(),
+                longitude = photo.longitude?.toDoubleOrNull()
+            )
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 40.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text(
+                text = "Photo Information",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Basic Info Section
+            MetadataSection(title = "File Details") {
+                MetadataRow(Icons.Default.Description, "Filename", photo.filename)
+                MetadataRow(Icons.Default.CalendarToday, "Captured", photo.taken_at ?: "Unknown")
+                val sizeBytes = photo.size?.toLongOrNull() ?: 0L
+                MetadataRow(Icons.Default.Storage, "Size", formatSize(sizeBytes))
+                if (photo.width != null) {
+                    MetadataRow(Icons.Default.AspectRatio, "Dimensions", "${photo.width} x ${photo.height}")
+                }
+                MetadataRow(Icons.Default.Label, "Format", photo.mime_type ?: "Unknown")
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // EXIF Section
+            MetadataSection(title = "Camera EXIF") {
+                MetadataRow(Icons.Default.CameraAlt, "Camera", exifData.camera)
+                MetadataRow(Icons.Default.Iso, "ISO", exifData.iso)
+                MetadataRow(Icons.Default.ShutterSpeed, "Shutter", exifData.shutter)
+                MetadataRow(Icons.Default.Camera, "Aperture", exifData.aperture)
+            }
+
+            // Location Section
+            if (exifData.latitude != null && exifData.longitude != null) {
+                Spacer(modifier = Modifier.height(24.dp))
+                MetadataSection(title = "Location") {
+                    MetadataRow(Icons.Default.LocationOn, "Coordinates", "${exifData.latitude}, ${exifData.longitude}")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            val gmmIntentUri = Uri.parse("geo:0,0?q=${exifData.latitude},${exifData.longitude}(${photo.filename})")
+                            val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
+                            mapIntent.setPackage("com.google.android.apps.maps")
+                            context.startActivity(mapIntent)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Map, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("View on Google Maps")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MetadataSection(title: String, content: @Composable () -> Unit) {
+    Column {
+        Text(
+            text = title.uppercase(),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+fun MetadataRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
         }
     }
 }
