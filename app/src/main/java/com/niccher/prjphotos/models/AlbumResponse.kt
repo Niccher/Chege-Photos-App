@@ -17,3 +17,9 @@ data class Album(
     val cover_photo: String? = null,
     val photo_count: String? = "0"
 )
+
+@Serializable
+data class SingleAlbumResponse(
+    val status: String,
+    val album: Album
+)

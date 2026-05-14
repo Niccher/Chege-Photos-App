@@ -120,4 +120,28 @@ class PhotoRepository(private val context: Context) {
             false
         }
     }
+
+    suspend fun createAlbum(name: String, description: String?): Boolean {
+        return try {
+            ApiClient.getPhotoService(context).createAlbum(name, description).isSuccessful
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun updateAlbum(id: String, name: String, description: String?): Boolean {
+        return try {
+            ApiClient.getPhotoService(context).updateAlbum(id, name, description).isSuccessful
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun deleteAlbum(id: String): Boolean {
+        return try {
+            ApiClient.getPhotoService(context).deleteAlbum(id).isSuccessful
+        } catch (e: Exception) {
+            false
+        }
+    }
 }

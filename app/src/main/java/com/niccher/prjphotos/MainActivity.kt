@@ -1,5 +1,6 @@
 package com.niccher.prjphotos
 
+import com.niccher.prjphotos.R
 import android.Manifest
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -36,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
@@ -49,6 +51,7 @@ import com.niccher.prjphotos.repository.PhotoRepository
 import com.niccher.prjphotos.ui.theme.PrjPhotosTheme
 import com.niccher.prjphotos.ui.theme.AppTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import retrofit2.Response
@@ -162,10 +165,10 @@ class MainActivity : FragmentActivity() {
     }
 }
 
-enum class Screen(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    Sync("Sync", Icons.Default.CloudUpload),
-    Gallery("Gallery", Icons.Default.Collections),
-    Albums("Albums", Icons.Default.Album)
+enum class Screen(val title: String, val iconResId: Int) {
+    Sync("Sync", R.drawable.ic_nav_sync),
+    Gallery("Gallery", R.drawable.ic_nav_gallery),
+    Albums("Albums", R.drawable.ic_nav_albums)
 }
 
 enum class SidebarItem(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
@@ -175,7 +178,8 @@ enum class SidebarItem(val title: String, val icon: androidx.compose.ui.graphics
     Archive("Archive", Icons.Default.Archive),
     Trash("Trash", Icons.Default.Delete),
     Explore("Explore", Icons.Default.Explore),
-    Theme("Theme", Icons.Default.Palette)
+    Theme("Theme", Icons.Default.Palette),
+    About("About", Icons.Default.Info)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -246,6 +250,15 @@ fun MainScreen(
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    
+    val appVersion = remember {
+        try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            pInfo.versionName ?: "1.0.0"
+        } catch (e: Exception) {
+            "1.0.0"
+        }
+    }
 
     // Ensure drawer is closed on startup to prevent auto-opening due to state restoration
     LaunchedEffect(Unit) {
@@ -343,60 +356,98 @@ fun MainScreen(
         gesturesEnabled = isLoggedIn,
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.width(300.dp)
+                modifier = Modifier.width(300.dp),
+                drawerContainerColor = MaterialTheme.colorScheme.surface
             ) {
-                Spacer(modifier = Modifier.height(16.dp))
-                // Library Section
-                Text("Library", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
-                listOf(SidebarItem.Explore, SidebarItem.Memories, SidebarItem.Favorites).forEach { item ->
-                    NavigationDrawerItem(
-                        label = { Text(item.title) },
-                        selected = currentScreen == item,
-                        onClick = {
-                            currentScreen = item
-                            scope.launch { drawerState.close() }
-                        },
-                        icon = { Icon(item.icon, contentDescription = item.title) },
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                    )
+                // Unique Sidebar Header with Gradient
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp)
+                        .background(
+                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.primary,
+                                    MaterialTheme.colorScheme.tertiary
+                                )
+                            )
+                        ),
+                    contentAlignment = Alignment.BottomStart
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.PhotoLibrary,
+                            contentDescription = "App Icon",
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "PrjPhotos",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                        )
+                    }
                 }
-
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                // Tools Section
-                Text("Tools", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
-                listOf(SidebarItem.Archive, SidebarItem.Trash, SidebarItem.Theme).forEach { item ->
-                    NavigationDrawerItem(
-                        label = { Text(item.title) },
-                        selected = currentScreen == item,
-                        onClick = {
-                            if (item == SidebarItem.Theme) {
-                                showThemeDialog = true
-                            } else {
+                
+                Column(modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                ) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Library Section
+                    Text("Library", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    listOf(SidebarItem.Explore, SidebarItem.Memories, SidebarItem.Favorites).forEach { item ->
+                        NavigationDrawerItem(
+                            label = { Text(item.title) },
+                            selected = currentScreen == item,
+                            onClick = {
                                 currentScreen = item
-                            }
-                            scope.launch { drawerState.close() }
-                        },
-                        icon = { Icon(item.icon, contentDescription = item.title) },
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                    )
-                }
+                                scope.launch { drawerState.close() }
+                            },
+                            icon = { Icon(item.icon, contentDescription = item.title, tint = MaterialTheme.colorScheme.primary) },
+                            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                        )
+                    }
 
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-                // Account Section
-                Text("Account", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
-                listOf(SidebarItem.Profile).forEach { item ->
-                    NavigationDrawerItem(
-                        label = { Text(item.title) },
-                        selected = currentScreen == item,
-                        onClick = {
-                            currentScreen = item
-                            scope.launch { drawerState.close() }
-                        },
-                        icon = { Icon(item.icon, contentDescription = item.title) },
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                    )
+                    // Tools Section
+                    Text("Tools", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    listOf(SidebarItem.Archive, SidebarItem.Trash, SidebarItem.Theme).forEach { item ->
+                        NavigationDrawerItem(
+                            label = { Text(item.title) },
+                            selected = currentScreen == item,
+                            onClick = {
+                                if (item == SidebarItem.Theme) {
+                                    showThemeDialog = true
+                                } else {
+                                    currentScreen = item
+                                }
+                                scope.launch { drawerState.close() }
+                            },
+                            icon = { Icon(item.icon, contentDescription = item.title, tint = MaterialTheme.colorScheme.secondary) },
+                            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                        )
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                    // Account Section
+                    Text("Account", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    listOf(SidebarItem.Profile, SidebarItem.About).forEach { item ->
+                        NavigationDrawerItem(
+                            label = { Text(item.title) },
+                            selected = currentScreen == item,
+                            onClick = {
+                                currentScreen = item
+                                scope.launch { drawerState.close() }
+                            },
+                            icon = { Icon(item.icon, contentDescription = item.title, tint = MaterialTheme.colorScheme.tertiary) },
+                            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                        )
+                    }
                 }
             }
         }
@@ -422,13 +473,66 @@ fun MainScreen(
             },
             bottomBar = {
                 if (isLoggedIn) {
-                    NavigationBar {
-                        Screen.values().forEach { screen ->
-                            NavigationBarItem(
-                                icon = { Icon(screen.icon, contentDescription = screen.title) },
-                                label = { Text(screen.title) },
-                                selected = currentScreen == screen,
-                                onClick = { currentScreen = screen }
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+                        tonalElevation = 8.dp,
+                        shadowElevation = 8.dp
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp, bottom = 4.dp, start = 16.dp, end = 16.dp),
+                                horizontalArrangement = Arrangement.SpaceAround,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Screen.values().forEach { screen ->
+                                    val selected = currentScreen == screen
+                                    val iconColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                    
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.clickable(
+                                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                            indication = null,
+                                            onClick = { currentScreen = screen }
+                                        )
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .background(
+                                                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                                    shape = RoundedCornerShape(16.dp)
+                                                )
+                                                .padding(horizontal = 20.dp, vertical = 6.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                painter = androidx.compose.ui.res.painterResource(id = screen.iconResId),
+                                                contentDescription = screen.title,
+                                                tint = iconColor,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = screen.title, 
+                                            style = MaterialTheme.typography.labelSmall, 
+                                            fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium,
+                                            color = iconColor
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = "v$appVersion",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(bottom = 6.dp)
                             )
                         }
                     }
@@ -469,6 +573,7 @@ fun MainScreen(
                         SidebarItem.Archive -> RemotePhotoListScreen(repository, serverUrl, "Archive", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getArchived() })
                         SidebarItem.Trash -> RemotePhotoListScreen(repository, serverUrl, "Trash", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getTrash() })
                         SidebarItem.Explore -> RemotePhotoListScreen(repository, serverUrl, "Explore", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getExplore() })
+                        SidebarItem.About -> AboutScreen(appVersion)
                     }
                 }
             }
@@ -484,7 +589,8 @@ fun RemotePhotoListScreen(
     title: String,
     activeDownloads: MutableMap<Long, String>,
     downloadProgress: MutableMap<String, Float>,
-    fetchPhotos: (suspend (Context) -> Response<PhotoListResponse>)? = null
+    fetchPhotos: (suspend (Context) -> Response<PhotoListResponse>)? = null,
+    onPhotosLoaded: ((Int) -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var photos by remember { mutableStateOf(listOf<Photo>()) }
@@ -512,6 +618,7 @@ fun RemotePhotoListScreen(
         } else {
             repository.getRemotePhotos()
         }
+        onPhotosLoaded?.invoke(photos.size)
         isLoading = false
     }
 
@@ -704,7 +811,7 @@ fun RemotePhotoListScreen(
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(4.dp)
+                                .padding(6.dp)
                                 .combinedClickable(
                                     onClick = { 
                                         if (isSelectionMode) {
@@ -722,6 +829,8 @@ fun RemotePhotoListScreen(
                                         }
                                     }
                                 ),
+                            shape = RoundedCornerShape(16.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                             border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
                         ) {
                             Box {
@@ -1253,11 +1362,34 @@ fun GalleryScreen(repository: PhotoRepository, baseUrl: String, activeDownloads:
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: MutableMap<Long, String>, downloadProgress: MutableMap<String, Float>) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var albums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
     var isLoading by remember { mutableStateOf(true) }
     var selectedAlbum by remember { mutableStateOf<PhotoAlbum?>(null) } // Detail state
+    var albumPhotosCount by remember { mutableStateOf<Int?>(null) }
+
+    var showCreateAlbumDialog by remember { mutableStateOf(false) }
+    var albumToEdit by remember { mutableStateOf<PhotoAlbum?>(null) }
+    var albumToDelete by remember { mutableStateOf<PhotoAlbum?>(null) }
+    val scope = rememberCoroutineScope()
+
+    val fetchAlbums: () -> Unit = {
+        isLoading = true
+        scope.launch {
+            try {
+                val response = ApiClient.getPhotoService(context).getAlbums()
+                if (response.isSuccessful) {
+                    albums = response.body()?.albums ?: emptyList()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Error fetching albums: ${e.message}", Toast.LENGTH_SHORT).show()
+            } finally {
+                isLoading = false
+            }
+        }
+    }
 
     if (selectedAlbum != null) {
         // Show Album Details View
@@ -1266,11 +1398,14 @@ fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: 
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { selectedAlbum = null }) {
+                IconButton(onClick = { 
+                    selectedAlbum = null
+                    albumPhotosCount = null 
+                }) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                 }
                 Text(
-                    text = selectedAlbum!!.name,
+                    text = "${selectedAlbum!!.name} (${albumPhotosCount ?: selectedAlbum!!.photo_count ?: "0"} photos)",
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(start = 8.dp)
                 )
@@ -1283,51 +1418,163 @@ fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: 
                 title = selectedAlbum!!.name,
                 activeDownloads = activeDownloads,
                 downloadProgress = downloadProgress,
-                fetchPhotos = { ApiClient.getPhotoService(it).getAlbumPhotos(selectedAlbum!!.id ?: "") }
+                fetchPhotos = { ApiClient.getPhotoService(it).getAlbumPhotos(selectedAlbum!!.id ?: "") },
+                onPhotosLoaded = { albumPhotosCount = it }
             )
         }
     } else {
         // Show Albums List View
         LaunchedEffect(Unit) {
-            try {
-                val response = ApiClient.getPhotoService(context).getAlbums()
-                if (response.isSuccessful) {
-                    albums = response.body()?.albums ?: emptyList()
-                }
-            } catch (e: Exception) {
-                Toast.makeText(context, "Error fetching albums: ${e.message}", Toast.LENGTH_SHORT).show()
-            } finally {
-                isLoading = false
-            }
+            fetchAlbums()
         }
 
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else {
-            if (albums.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No albums found")
+                    CircularProgressIndicator()
                 }
             } else {
-                LazyColumn {
-                    items(albums) { album ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clickable { selectedAlbum = album }
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text(album.name, style = MaterialTheme.typography.headlineSmall)
-                                album.description?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-                                Text("${album.photo_count} photos", style = MaterialTheme.typography.labelSmall)
+                if (albums.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("No albums found")
+                    }
+                } else {
+                    LazyColumn(contentPadding = PaddingValues(bottom = 80.dp)) {
+                        items(albums) { album ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp, horizontal = 8.dp)
+                                    .combinedClickable(
+                                        onClick = { selectedAlbum = album },
+                                        onLongClick = { albumToEdit = album }
+                                    ),
+                                shape = RoundedCornerShape(16.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(album.name, style = MaterialTheme.typography.headlineSmall)
+                                        album.description?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                                        Text("${album.photo_count} photos", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                    IconButton(onClick = { albumToDelete = album }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete Album", tint = MaterialTheme.colorScheme.error)
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+            
+            FloatingActionButton(
+                onClick = { showCreateAlbumDialog = true },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Create Album")
+            }
+        }
+
+        // Dialogs
+        if (showCreateAlbumDialog || albumToEdit != null) {
+            val isEdit = albumToEdit != null
+            var name by remember { mutableStateOf(albumToEdit?.name ?: "") }
+            var desc by remember { mutableStateOf(albumToEdit?.description ?: "") }
+            
+            AlertDialog(
+                onDismissRequest = { 
+                    showCreateAlbumDialog = false
+                    albumToEdit = null 
+                },
+                title = { Text(if (isEdit) "Edit Album" else "Create Album") },
+                text = {
+                    Column {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            label = { Text("Album Name") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = desc,
+                            onValueChange = { desc = it },
+                            label = { Text("Description (Optional)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (name.isNotBlank()) {
+                                scope.launch {
+                                    val success = if (isEdit) {
+                                        repository.updateAlbum(albumToEdit!!.id ?: "", name, desc)
+                                    } else {
+                                        repository.createAlbum(name, desc)
+                                    }
+                                    if (success) {
+                                        Toast.makeText(context, if (isEdit) "Album updated" else "Album created", Toast.LENGTH_SHORT).show()
+                                        fetchAlbums()
+                                    } else {
+                                        Toast.makeText(context, "Failed to save album", Toast.LENGTH_SHORT).show()
+                                    }
+                                    showCreateAlbumDialog = false
+                                    albumToEdit = null
+                                }
+                            }
+                        }
+                    ) {
+                        Text("Save")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { 
+                        showCreateAlbumDialog = false
+                        albumToEdit = null 
+                    }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (albumToDelete != null) {
+            AlertDialog(
+                onDismissRequest = { albumToDelete = null },
+                title = { Text("Delete Album") },
+                text = { Text("Are you sure you want to delete '${albumToDelete?.name}'?") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                val success = repository.deleteAlbum(albumToDelete!!.id ?: "")
+                                if (success) {
+                                    Toast.makeText(context, "Album deleted", Toast.LENGTH_SHORT).show()
+                                    fetchAlbums()
+                                } else {
+                                    Toast.makeText(context, "Failed to delete album", Toast.LENGTH_SHORT).show()
+                                }
+                                albumToDelete = null
+                            }
+                        }
+                    ) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { albumToDelete = null }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }
@@ -1847,6 +2094,141 @@ fun MetadataRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: St
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
+        }
+    }
+}
+
+@Composable
+fun AboutScreen(version: String) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(80.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.PhotoLibrary,
+                            contentDescription = null,
+                            modifier = Modifier.size(40.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "PrjPhotos",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                )
+                Text(
+                    text = "Version $version",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "About the App",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "PrjPhotos is a premium photo management application designed for high-performance syncing and elegant viewing. It allows you to organize your memories into beautiful albums and access them securely across your devices.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "How it Works",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    listOf(
+                        "Sync" to "Automatically backup and sync your local photos to the cloud.",
+                        "Gallery" to "Browse all your photos in a high-performance grid with search and filtering.",
+                        "Albums" to "Create, rename, and manage collections of your favorite moments."
+                    ).forEach { (title, desc) ->
+                        Row(modifier = Modifier.padding(vertical = 4.dp)) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp).padding(top = 2.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(text = title, style = MaterialTheme.typography.bodyLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                Text(text = desc, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Libraries Used",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    listOf("Jetpack Compose", "Retrofit", "Coil", "OkHttp", "Material 3", "Coroutines", "Biometrics").forEach { lib ->
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                            Box(modifier = Modifier.size(4.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = lib, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        }
+        
+        item {
+            Spacer(modifier = Modifier.height(32.dp))
+            Text(
+                text = "© 2024 Niccher. All rights reserved.",
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+            )
+            Spacer(modifier = Modifier.height(80.dp)) // Extra space for bottom bar
         }
     }
 }

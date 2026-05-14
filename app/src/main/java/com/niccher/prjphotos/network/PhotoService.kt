@@ -59,4 +59,24 @@ interface PhotoService {
 
     @POST("photos/favorite/{id}")
     suspend fun favoritePhoto(@Path("id") id: String): Response<AuthResponse>
+
+    @FormUrlEncoded
+    @POST("api/albums")
+    suspend fun createAlbum(
+        @Field("name") name: String,
+        @Field("description") description: String? = null
+    ): Response<com.niccher.prjphotos.models.SingleAlbumResponse>
+
+    @FormUrlEncoded
+    @PUT("api/albums/{id}")
+    suspend fun updateAlbum(
+        @Path("id") id: String,
+        @Field("name") name: String,
+        @Field("description") description: String? = null
+    ): Response<com.niccher.prjphotos.models.SingleAlbumResponse>
+
+    @DELETE("api/albums/{id}")
+    suspend fun deleteAlbum(
+        @Path("id") id: String
+    ): Response<AuthResponse>
 }
