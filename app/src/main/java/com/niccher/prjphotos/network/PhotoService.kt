@@ -47,4 +47,16 @@ interface PhotoService {
         @Part file: MultipartBody.Part,
         @Part("description") description: RequestBody? = null
     ): Response<AuthResponse>
+
+    @POST("photos/delete/{id}")
+    suspend fun deletePhoto(@Path("id") id: String): Response<AuthResponse>
+
+    @POST("photos/restore/{id}")
+    suspend fun restorePhoto(@Path("id") id: String): Response<AuthResponse>
+
+    @POST("photos/archive/{id}")
+    suspend fun archivePhoto(@Path("id") id: String): Response<AuthResponse>
+
+    @POST("photos/favorite/{id}")
+    suspend fun favoritePhoto(@Path("id") id: String): Response<AuthResponse>
 }

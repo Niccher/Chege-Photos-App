@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 data class Photo(
     val id: String? = null,
     val user_id: String? = null,
+    val album_id: String? = null,
     val filename: String,
     val path: String,
     val thumbnail_path: String? = null,
@@ -18,7 +19,9 @@ data class Photo(
     val longitude: String? = null,
     val is_archived: String? = null,
     val is_favorite: String? = null,
-    val is_deleted: String? = null
+    val is_deleted: String? = null,
+    val created_at: String? = null,
+    val updated_at: String? = null
 )
 
 @Serializable

@@ -58,6 +58,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -461,13 +462,13 @@ fun MainScreen(
                     when (currentScreen) {
                         SidebarItem.Profile -> ProfileScreen(sessionManager)
                         Screen.Sync -> SyncScreen(repository)
-                        Screen.Gallery -> GalleryScreen(serverUrl, activeDownloads, downloadProgress)
-                        Screen.Albums -> AlbumsScreen(serverUrl, activeDownloads, downloadProgress)
-                        SidebarItem.Memories -> RemotePhotoListScreen(serverUrl, "Memories", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getMemories() }
-                        SidebarItem.Favorites -> RemotePhotoListScreen(serverUrl, "Favorites", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getFavorites() }
-                        SidebarItem.Archive -> RemotePhotoListScreen(serverUrl, "Archive", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getArchived() }
-                        SidebarItem.Trash -> RemotePhotoListScreen(serverUrl, "Trash", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getTrash() }
-                        SidebarItem.Explore -> RemotePhotoListScreen(serverUrl, "Explore", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getExplore() }
+                        Screen.Gallery -> GalleryScreen(repository, serverUrl, activeDownloads, downloadProgress)
+                        Screen.Albums -> AlbumsScreen(repository, serverUrl, activeDownloads, downloadProgress)
+                        SidebarItem.Memories -> RemotePhotoListScreen(repository, serverUrl, "Memories", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getMemories() })
+                        SidebarItem.Favorites -> RemotePhotoListScreen(repository, serverUrl, "Favorites", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getFavorites() })
+                        SidebarItem.Archive -> RemotePhotoListScreen(repository, serverUrl, "Archive", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getArchived() })
+                        SidebarItem.Trash -> RemotePhotoListScreen(repository, serverUrl, "Trash", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getTrash() })
+                        SidebarItem.Explore -> RemotePhotoListScreen(repository, serverUrl, "Explore", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getExplore() })
                     }
                 }
             }
@@ -478,11 +479,12 @@ fun MainScreen(
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun RemotePhotoListScreen(
+    repository: PhotoRepository,
     baseUrl: String, 
     title: String,
     activeDownloads: MutableMap<Long, String>,
     downloadProgress: MutableMap<String, Float>,
-    fetchPhotos: suspend (Context) -> Response<PhotoListResponse>
+    fetchPhotos: (suspend (Context) -> Response<PhotoListResponse>)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var photos by remember { mutableStateOf(listOf<Photo>()) }
@@ -494,19 +496,23 @@ fun RemotePhotoListScreen(
     
     // State for Fullscreen Carousel
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
+    var isSelectionMode by remember { mutableStateOf(false) }
+    val selectedPhotos = remember { mutableStateListOf<Photo>() }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(title) {
         isLoading = true
-        try {
-            val response = fetchPhotos(context)
-            if (response.isSuccessful) {
-                photos = response.body()?.photos ?: emptyList()
+        photos = if (fetchPhotos != null) {
+            try {
+                val response = fetchPhotos(context)
+                if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
+            } catch (e: Exception) {
+                emptyList()
             }
-        } catch (e: Exception) {
-            Toast.makeText(context, "Error fetching $title: ${e.message}", Toast.LENGTH_SHORT).show()
-        } finally {
-            isLoading = false
+        } else {
+            repository.getRemotePhotos()
         }
+        isLoading = false
     }
 
     val filteredPhotos = remember(photos, searchQuery, selectedType) {
@@ -524,45 +530,144 @@ fun RemotePhotoListScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Search and Filter UI
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search photos...") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear")
+        if (isSelectionMode) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { 
+                            isSelectionMode = false
+                            selectedPhotos.clear()
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel")
+                        }
+                        Text(text = "${selectedPhotos.size} selected", style = MaterialTheme.typography.titleMedium)
+                    }
+                    Row {
+                        IconButton(
+                            enabled = selectedPhotos.isNotEmpty(),
+                            onClick = { 
+                                selectedPhotos.forEach { photo ->
+                                    scope.launch {
+                                        downloadRemotePhoto(context, baseUrl, photo)?.let { id ->
+                                            activeDownloads[id] = photo.path
+                                            downloadProgress[photo.path] = 0f
+                                        }
+                                    }
+                                }
+                                isSelectionMode = false
+                                selectedPhotos.clear()
+                            }
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = "Download All")
+                        }
+                        IconButton(
+                            enabled = selectedPhotos.isNotEmpty(),
+                            onClick = { 
+                                val items = selectedPhotos.toList()
+                                isSelectionMode = false
+                                selectedPhotos.clear()
+                                scope.launch {
+                                    items.forEach { photo ->
+                                        repository.deletePhoto(photo.id ?: "")
+                                    }
+                                    // Re-fetch photos
+                                    isLoading = true
+                                    photos = if (fetchPhotos != null) {
+                                        try {
+                                            val response = fetchPhotos(context)
+                                            if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
+                                        } catch (e: Exception) { emptyList() }
+                                    } else {
+                                        repository.getRemotePhotos()
+                                    }
+                                    isLoading = false
+                                    Toast.makeText(context, if (title == "Trash") "Permanently deleted items" else "Moved items to trash", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = if (title == "Trash") "Delete Permanently" else "Trash All")
+                        }
+                        if (title == "Trash") {
+                            IconButton(
+                                enabled = selectedPhotos.isNotEmpty(),
+                                onClick = { 
+                                    val items = selectedPhotos.toList()
+                                    isSelectionMode = false
+                                    selectedPhotos.clear()
+                                    scope.launch {
+                                        items.forEach { photo ->
+                                            repository.restorePhoto(photo.id ?: "")
+                                        }
+                                        // Re-fetch photos
+                                        isLoading = true
+                                        photos = if (fetchPhotos != null) {
+                                            try {
+                                                val response = fetchPhotos(context)
+                                                if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
+                                            } catch (e: Exception) { emptyList() }
+                                        } else {
+                                            repository.getRemotePhotos()
+                                        }
+                                        isLoading = false
+                                        Toast.makeText(context, "Restored items", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            ) {
+                                Icon(Icons.Default.RestoreFromTrash, contentDescription = "Restore All")
+                            }
                         }
                     }
-                },
-                singleLine = true,
-                shape = MaterialTheme.shapes.medium
-            )
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                }
+            }
+        } else {
+            // Search and Filter UI
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
-                val types = listOf(null, "jpg", "png", "mp4")
-                items(types) { type ->
-                    FilterChip(
-                        selected = selectedType == type,
-                        onClick = { selectedType = type },
-                        label = { Text(type?.uppercase() ?: "All") },
-                        leadingIcon = if (selectedType == type) {
-                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                        } else null
-                    )
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Search photos...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.medium
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val types = listOf(null, "jpg", "png", "mp4")
+                    items(types) { type ->
+                        FilterChip(
+                            selected = selectedType == type,
+                            onClick = { selectedType = type },
+                            label = { Text(type?.uppercase() ?: "All") },
+                            leadingIcon = if (selectedType == type) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null
+                        )
+                    }
                 }
             }
         }
@@ -595,17 +700,32 @@ fun RemotePhotoListScreen(
                     contentPadding = PaddingValues(4.dp)
                 ) {
                     itemsIndexed(filteredPhotos) { index, photo ->
+                        val isSelected = selectedPhotos.contains(photo)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(4.dp)
-                                .clickable { 
-                                    // Find index in original photos list for carousel consistency if needed, 
-                                    // but here we use index in filtered list for carousel
-                                    selectedPhotoIndex = index 
-                                }
+                                .combinedClickable(
+                                    onClick = { 
+                                        if (isSelectionMode) {
+                                            if (isSelected) selectedPhotos.remove(photo)
+                                            else selectedPhotos.add(photo)
+                                            if (selectedPhotos.isEmpty()) isSelectionMode = false
+                                        } else {
+                                            selectedPhotoIndex = index 
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (!isSelectionMode) {
+                                            isSelectionMode = true
+                                            selectedPhotos.add(photo)
+                                        }
+                                    }
+                                ),
+                            border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
                         ) {
-                            Column {
+                            Box {
+                                Column {
                                 AsyncImage(
                                     model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path?.trimStart('/') ?: ""),
                                     contentDescription = photo.filename,
@@ -654,7 +774,23 @@ fun RemotePhotoListScreen(
                                         Icon(Icons.Default.Download, contentDescription = "Download")
                                     }
                                 }
-                            }
+                                
+                                }
+                                
+                                if (isSelected) {
+                                    Surface(
+                                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                                        color = MaterialTheme.colorScheme.primary,
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.padding(4.dp).size(16.dp),
+                                            tint = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                    }
+                                }
                         }
                     }
                 }
@@ -790,6 +926,7 @@ fun RemotePhotoListScreen(
             }
         }
     }
+}
 }
 
 
@@ -1111,12 +1248,12 @@ fun SyncScreen(repository: PhotoRepository) {
 }
 
 @Composable
-fun GalleryScreen(baseUrl: String, activeDownloads: MutableMap<Long, String>, downloadProgress: MutableMap<String, Float>) {
-    RemotePhotoListScreen(baseUrl, "Gallery", activeDownloads, downloadProgress) { ApiClient.getPhotoService(it).getRemotePhotos() }
+fun GalleryScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: MutableMap<Long, String>, downloadProgress: MutableMap<String, Float>) {
+    RemotePhotoListScreen(repository, baseUrl, "Gallery", activeDownloads, downloadProgress)
 }
 
 @Composable
-fun AlbumsScreen(baseUrl: String, activeDownloads: MutableMap<Long, String>, downloadProgress: MutableMap<String, Float>) {
+fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: MutableMap<Long, String>, downloadProgress: MutableMap<String, Float>) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var albums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -1141,6 +1278,7 @@ fun AlbumsScreen(baseUrl: String, activeDownloads: MutableMap<Long, String>, dow
             Spacer(modifier = Modifier.height(4.dp))
             // Reuse the RemotePhotoListScreen to display the album's photos using the new endpoint
             RemotePhotoListScreen(
+                repository = repository,
                 baseUrl = baseUrl,
                 title = selectedAlbum!!.name,
                 activeDownloads = activeDownloads,
@@ -1229,9 +1367,11 @@ private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo)
 
 fun showUploadNotification(context: Context, current: Int, total: Int, isFinished: Boolean = false) {
     val notificationManager = NotificationManagerCompat.from(context)
+    val percentage = if (total > 0) (current * 100) / total else 0
     val builder = NotificationCompat.Builder(context, "file_transfer_channel")
-        .setSmallIcon(R.mipmap.ic_launcher)
-        .setContentTitle(if (isFinished) "Prj Photos: Upload Done" else "Prj Photos: Uploading...")
+        .setSmallIcon(R.drawable.ic_app_icon)
+        .setContentTitle("PrjPhotos")
+        .setSubText(if (isFinished) "Sync Complete" else "Syncing...")
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setOngoing(!isFinished)
         .setOnlyAlertOnce(true)
@@ -1240,7 +1380,7 @@ fun showUploadNotification(context: Context, current: Int, total: Int, isFinishe
         builder.setContentText("Successfully synced $total items to gallery")
             .setProgress(0, 0, false)
     } else {
-        builder.setContentText("Syncing $current of $total items...")
+        builder.setContentText("Syncing $current of $total items ($percentage%)")
             .setProgress(total, current, false)
     }
 
