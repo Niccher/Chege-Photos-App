@@ -539,14 +539,12 @@ fun MainScreen(
                 }
             }
         ) { innerPadding ->
-            Column(
-                modifier = Modifier
-                    .padding(innerPadding)
-                    .fillMaxSize()
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                if (!isLoggedIn) {
+            if (!isLoggedIn) {
+                Box(
+                    modifier = Modifier
+                        .padding(innerPadding)
+                        .fillMaxSize()
+                ) {
                     LoginScreen(
                         serverUrl = serverUrl,
                         onUrlChange = { 
@@ -562,7 +560,15 @@ fun MainScreen(
                             isLoggedIn = true
                         }
                     )
-                } else {
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .padding(innerPadding)
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     when (currentScreen) {
                         SidebarItem.Profile -> ProfileScreen(sessionManager)
                         Screen.Sync -> SyncScreen(repository)
@@ -578,6 +584,7 @@ fun MainScreen(
                 }
             }
         }
+
     }
 }
 
@@ -1053,46 +1060,329 @@ fun LoginScreen(
     val sessionManager = remember { SessionManager(context) }
     val scope = rememberCoroutineScope()
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Login to Sync", style = MaterialTheme.typography.headlineMedium)
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        OutlinedTextField(
-            value = serverUrl,
-            onValueChange = onUrlChange,
-            label = { Text("Server URL") },
-            modifier = Modifier.fillMaxWidth()
+    var isLoading by remember { mutableStateOf(false) }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var showAdvanced by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        // ── Gradient hero background ─────────────────────────────────────
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.42f)
+                .background(
+                    brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.primary,
+                            MaterialTheme.colorScheme.tertiary
+                        )
+                    )
+                )
         )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(value = email, onValueChange = onEmailChange, label = { Text("Email") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = password, onValueChange = onPasswordChange, label = { Text("Password") }, modifier = Modifier.fillMaxWidth())
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = {
-            scope.launch {
-                try {
-                    val response = ApiClient.getPhotoService(context).login(email, password)
-                    if (response.isSuccessful) {
-                        val authData = response.body()
-                        authData?.access_token?.let {
-                            sessionManager.saveAuthToken(it)
-                            authData.user?.let { user ->
-                                sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
-                                sessionManager.updateLastLogin()
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // ── Branding area ────────────────────────────────────────────
+            Spacer(modifier = Modifier.height(56.dp))
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(24.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PhotoLibrary,
+                    contentDescription = "App icon",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(48.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "PrjPhotos",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+            Text(
+                text = "Your private photo cloud",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
+            )
+            Spacer(modifier = Modifier.height(40.dp))
+
+            // ── Login card ───────────────────────────────────────────────
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                shadowElevation = 12.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Sign In",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Enter your credentials to continue",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // ── Server URL (first) ───────────────────────────────
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ) {
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showAdvanced = !showAdvanced }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.Settings,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Server Settings",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                Icon(
+                                    imageVector = if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
                             }
-                            onLogin()
-                            Toast.makeText(context, "Login successful", Toast.LENGTH_SHORT).show()
+                            if (showAdvanced) {
+                                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                                OutlinedTextField(
+                                    value = serverUrl,
+                                    onValueChange = onUrlChange,
+                                    label = { Text("Server URL") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Cloud,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    singleLine = true,
+                                    placeholder = { Text("e.g. 192.168.1.50:2283 or https://photos.example.com") },
+                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
+                                        imeAction = androidx.compose.ui.text.input.ImeAction.Next
+                                    )
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                            }
                         }
-                    } else {
-                        Toast.makeText(context, "Login failed: ${response.message()}", Toast.LENGTH_SHORT).show()
                     }
-                } catch (e: Exception) {
-                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Email field
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = {
+                            onEmailChange(it)
+                            errorMessage = null
+                        },
+                        label = { Text("Email") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Email,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Email,
+                            imeAction = androidx.compose.ui.text.input.ImeAction.Next
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Password field
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = {
+                            onPasswordChange(it)
+                            errorMessage = null
+                        },
+                        label = { Text("Password") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                            }
+                        },
+                        visualTransformation = if (passwordVisible)
+                            androidx.compose.ui.text.input.VisualTransformation.None
+                        else
+                            androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+                            imeAction = androidx.compose.ui.text.input.ImeAction.Done
+                        )
+                    )
+
+
+                    // Error message
+                    if (errorMessage != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = errorMessage!!,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // Login button
+                    Button(
+                        onClick = {
+                            if (email.isBlank()) { errorMessage = "Email is required"; return@Button }
+                            if (password.isBlank()) { errorMessage = "Password is required"; return@Button }
+                            scope.launch {
+                                isLoading = true
+                                errorMessage = null
+                                try {
+                                    val response = ApiClient.getPhotoService(context).login(email, password)
+                                    if (response.isSuccessful) {
+                                        val authData = response.body()
+                                        authData?.access_token?.let {
+                                            sessionManager.saveAuthToken(it)
+                                            authData.user?.let { user ->
+                                                sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
+                                                sessionManager.updateLastLogin()
+                                            }
+                                            onLogin()
+                                            Toast.makeText(context, "Welcome back!", Toast.LENGTH_SHORT).show()
+                                        } ?: run {
+                                            errorMessage = "Invalid response from server"
+                                        }
+                                    } else {
+                                        errorMessage = "Login failed: ${response.message()}"
+                                    }
+                                } catch (e: Exception) {
+                                    errorMessage = "Cannot reach server. Check your URL."
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        enabled = !isLoading
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Signing in…")
+                        } else {
+                            Icon(
+                                Icons.Default.Login,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Sign In",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
             }
-        }) {
-            Text("Login")
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Footer hint
+            Text(
+                text = "Connect to your self-hosted server",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 32.dp)
+            )
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
