@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.niccher.prjphotos"
+    namespace = "com.niccher.chege_photos_app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.niccher.prjphotos"
+        applicationId = "com.niccher.chege_photos_app"
         minSdk = 29
         targetSdk = 36
         versionCode = 1
