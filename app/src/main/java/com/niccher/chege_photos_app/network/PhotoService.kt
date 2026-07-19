@@ -4,10 +4,14 @@ import com.niccher.chege_photos_app.models.AuthResponse
 import com.niccher.chege_photos_app.models.PhotoListResponse
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
+import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.*
 
 interface PhotoService {
+
+    @GET("api/test")
+    suspend fun ping(): Response<ResponseBody>
 
     @POST("api/login")
     @FormUrlEncoded

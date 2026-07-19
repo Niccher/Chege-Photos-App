@@ -19,6 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Prj Photos"
+rootProject.name = "Chege Photos"
 include(":app")
  

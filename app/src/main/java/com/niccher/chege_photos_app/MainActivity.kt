@@ -48,7 +48,7 @@ import com.niccher.chege_photos_app.models.AuthResponse
 import com.niccher.chege_photos_app.models.Photo
 import com.niccher.chege_photos_app.network.ApiClient
 import com.niccher.chege_photos_app.repository.PhotoRepository
-import com.niccher.chege_photos_app.ui.theme.PrjPhotosTheme
+import com.niccher.chege_photos_app.ui.theme.ChegePhotosTheme
 import com.niccher.chege_photos_app.ui.theme.AppTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
@@ -96,7 +96,7 @@ class MainActivity : FragmentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            PrjPhotosTheme(appTheme = selectedTheme.value) {
+            ChegePhotosTheme(appTheme = selectedTheme.value) {
                 MainScreen(photoRepository, pendingSharedFiles, selectedTheme)
             }
         }
@@ -179,6 +179,7 @@ enum class SidebarItem(val title: String, val icon: androidx.compose.ui.graphics
     Trash("Trash", Icons.Default.Delete),
     Explore("Explore", Icons.Default.Explore),
     Theme("Theme", Icons.Default.Palette),
+    ServerConfig("Server", Icons.Default.Cloud),
     About("About", Icons.Default.Info)
 }
 
@@ -191,7 +192,7 @@ fun MainScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val sessionManager = remember { SessionManager(context) }
-    val sharedPrefs = remember { context.getSharedPreferences("prj_photos_prefs", android.content.Context.MODE_PRIVATE) }
+    val sharedPrefs = remember { context.getSharedPreferences("chege_photos_prefs", android.content.Context.MODE_PRIVATE) }
     
     var serverUrl by remember { mutableStateOf(sharedPrefs.getString("server_url", "https://photos.chegecache.co.ke/") ?: "") }
     var isLoggedIn by remember { mutableStateOf(sessionManager.isLoggedIn()) }
@@ -383,7 +384,7 @@ fun MainScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "PrjPhotos",
+                            text = "Chege Photos",
                             style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onPrimary,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
@@ -436,7 +437,7 @@ fun MainScreen(
 
                     // Account Section
                     Text("Account", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                    listOf(SidebarItem.Profile, SidebarItem.About).forEach { item ->
+                    listOf(SidebarItem.Profile, SidebarItem.ServerConfig, SidebarItem.About).forEach { item ->
                         NavigationDrawerItem(
                             label = { Text(item.title) },
                             selected = currentScreen == item,
@@ -580,6 +581,15 @@ fun MainScreen(
                         SidebarItem.Trash -> RemotePhotoListScreen(repository, serverUrl, "Trash", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getTrash() })
                         SidebarItem.Explore -> RemotePhotoListScreen(repository, serverUrl, "Explore", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getExplore() })
                         SidebarItem.About -> AboutScreen(appVersion)
+                        SidebarItem.ServerConfig -> ServerConfigScreen(
+                            currentUrl = serverUrl,
+                            onUrlSaved = { newUrl ->
+                                serverUrl = newUrl
+                                sharedPrefs.edit().putString("server_url", newUrl).apply()
+                                ApiClient.updateBaseUrl(newUrl, context)
+                            },
+                            onNavigateBack = { currentScreen = Screen.Sync }
+                        )
                     }
                 }
             }
@@ -1107,7 +1117,7 @@ fun LoginScreen(
             }
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "PrjPhotos",
+                text = "Chege Photos",
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onPrimary
@@ -1881,10 +1891,10 @@ private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo)
         val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
         val url = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/')
         val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
-            .setTitle("Prj Photos: Downloading")
+            .setTitle("Chege Photos: Downloading")
             .setDescription(photo.filename)
             .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_PICTURES, "Prj Photos/" + photo.filename)
+            .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_PICTURES, "Chege Photos/" + photo.filename)
             .setAllowedOverMetered(true)
             .setAllowedOverRoaming(true)
 
@@ -1907,7 +1917,7 @@ fun showUploadNotification(context: Context, current: Int, total: Int, isFinishe
     val percentage = if (total > 0) (current * 100) / total else 0
     val builder = NotificationCompat.Builder(context, "file_transfer_channel")
         .setSmallIcon(R.drawable.ic_app_icon)
-        .setContentTitle("PrjPhotos")
+        .setContentTitle("Chege Photos")
         .setSubText(if (isFinished) "Sync Complete" else "Syncing...")
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setOngoing(!isFinished)
@@ -2096,7 +2106,7 @@ fun showBiometricPrompt(activity: FragmentActivity, onResult: (Boolean) -> Unit)
         })
 
     val promptInfo = BiometricPrompt.PromptInfo.Builder()
-        .setTitle("Biometric login for PrjPhotos")
+        .setTitle("Biometric login for Chege Photos")
         .setSubtitle("Log in using your biometric credential")
         .setNegativeButtonText("Cancel")
         .build()
@@ -2389,6 +2399,172 @@ fun MetadataRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: St
 }
 
 @Composable
+fun ServerConfigScreen(
+    currentUrl: String,
+    onUrlSaved: (String) -> Unit,
+    onNavigateBack: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    var url by remember { mutableStateOf(currentUrl) }
+    var testing by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onNavigateBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Server Configuration",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Change the backend server your app connects to.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Server URL", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it; testResult = null },
+                    label = { Text("Server URL") },
+                    leadingIcon = { Icon(Icons.Default.Cloud, contentDescription = null) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
+                    placeholder = { Text("e.g. 192.168.1.50:2283 or https://photos.example.com") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            testing = true
+                            testResult = null
+                            val normalized = ApiClient.normalizeUrl(url)
+                            ApiClient.updateBaseUrl(normalized, context)
+                            scope.launch {
+                                try {
+                                    val res = withContext(Dispatchers.IO) {
+                                        ApiClient.getPhotoService(context).ping()
+                                    }
+                                    testResult = if (res.isSuccessful) "Connection successful!"
+                                    else "Server responded with ${res.code()}"
+                                } catch (e: Exception) {
+                                    testResult = "Error: ${e.localizedMessage ?: "Could not reach server"}"
+                                }
+                                testing = false
+                            }
+                        },
+                        enabled = url.isNotBlank() && !testing,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (testing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text("Test Connection")
+                    }
+
+                    Button(
+                        onClick = {
+                            try {
+                                val normalized = ApiClient.normalizeUrl(url)
+                                onUrlSaved(normalized)
+                                onNavigateBack()
+                            } catch (e: Exception) {
+                                android.widget.Toast.makeText(context, "Error: ${e.localizedMessage}", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        },
+                        enabled = url.isNotBlank(),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Save")
+                    }
+                }
+
+                if (testResult != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    val isSuccess = testResult!!.startsWith("Connection successful") ||
+                            testResult!!.startsWith("URL saved")
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSuccess) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.errorContainer
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                if (isSuccess) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = if (isSuccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                testResult!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isSuccess) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "Info",
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "The server URL is where your Chege Photos backend is hosted. " +
+                            "For local servers on your network, use the LAN IP (e.g. 192.168.1.50:9005). " +
+                            "For remote servers, use the full https URL. " +
+                            "The app will automatically detect and use the correct protocol.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun AboutScreen(version: String) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -2416,7 +2592,7 @@ fun AboutScreen(version: String) {
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = "PrjPhotos",
+                    text = "Chege Photos",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                 )
@@ -2442,7 +2618,7 @@ fun AboutScreen(version: String) {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "PrjPhotos is a premium photo management application designed for high-performance syncing and elegant viewing. It allows you to organize your memories into beautiful albums and access them securely across your devices.",
+                        text = "Chege Photos is a premium photo management application designed for high-performance syncing and elegant viewing. It allows you to organize your memories into beautiful albums and access them securely across your devices.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }

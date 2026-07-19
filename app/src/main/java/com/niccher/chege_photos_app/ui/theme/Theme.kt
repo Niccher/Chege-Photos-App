@@ -33,7 +33,7 @@ private val SolarizedColorScheme = lightColorScheme(
     background = SolarizedBackground,
     surface = SolarizedSurface,
     onSurface = SolarizedOnSurface,
-    onBackground = SolarizedOnSurface
+    onBackground = SolarizedOnBackground
 )
 
 private val GreyColorScheme = darkColorScheme(
@@ -41,7 +41,7 @@ private val GreyColorScheme = darkColorScheme(
     background = GreyBackground,
     surface = GreySurface,
     onSurface = GreyOnSurface,
-    onBackground = GreyOnSurface
+    onBackground = GreyOnBackground
 )
 
 private val MidnightColorScheme = darkColorScheme(
@@ -49,7 +49,7 @@ private val MidnightColorScheme = darkColorScheme(
     background = MidnightBackground,
     surface = MidnightSurface,
     onSurface = MidnightOnSurface,
-    onBackground = MidnightOnSurface
+    onBackground = MidnightOnBackground
 )
 
 private val BlackColorScheme = darkColorScheme(
@@ -57,11 +57,11 @@ private val BlackColorScheme = darkColorScheme(
     background = BlackBackground,
     surface = BlackSurface,
     onSurface = BlackOnSurface,
-    onBackground = BlackOnSurface
+    onBackground = BlackOnBackground
 )
 
 @Composable
-fun PrjPhotosTheme(
+fun ChegePhotosTheme(
     appTheme: AppTheme = AppTheme.DEFAULT,
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,

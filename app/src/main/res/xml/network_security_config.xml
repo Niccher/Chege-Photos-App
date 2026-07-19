@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Network Security Config for PrjPhotos
+    Network Security Config for Chege Photos
     ======================================
     This app is designed to connect to self-hosted servers on any network.
     Cleartext (HTTP) is allowed globally so that:
