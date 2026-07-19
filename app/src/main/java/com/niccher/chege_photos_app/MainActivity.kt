@@ -1435,8 +1435,10 @@ fun SyncScreen(repository: PhotoRepository) {
                     processedCount = 0
                     currentFileProgress = 0f
                     scope.launch {
-                        for (photo in photos) {
+                        showUploadNotification(context, 0, photos.size)
+                        for ((index, photo) in photos.withIndex()) {
                             currentlySyncingFile = photo
+                            showUploadNotification(context, index + 1, photos.size)
                             val success = repository.syncPhoto(photo) { progress ->
                                 currentFileProgress = progress
                             }
@@ -1448,6 +1450,7 @@ fun SyncScreen(repository: PhotoRepository) {
                             currentlySyncingFile = null
                         }
                         isSyncing = false
+                        showUploadNotification(context, processedCount, photos.size, isFinished = true)
                         Toast.makeText(context, "Synced $processedCount out of ${photos.size} photos", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -1525,7 +1528,7 @@ fun SyncScreen(repository: PhotoRepository) {
                             }
                             IconButton(
                                 onClick = {
-                                    Toast.makeText(context, "Uploading ${photo.name}...", Toast.LENGTH_SHORT).show()
+                                    showUploadNotification(context, 1, 1)
                                     scope.launch {
                                         currentlySyncingFile = photo
                                         val success = repository.syncPhoto(photo) { progress ->
@@ -1533,8 +1536,10 @@ fun SyncScreen(repository: PhotoRepository) {
                                         }
                                         if (success) {
                                             sessionManager.updateLastUpload()
+                                            showUploadNotification(context, 1, 1, isFinished = true)
                                             Toast.makeText(context, "Uploaded ${photo.name}", Toast.LENGTH_SHORT).show()
                                         } else {
+                                            showUploadNotification(context, 1, 1, isFinished = true)
                                             Toast.makeText(context, "Upload failed ${photo.name}", Toast.LENGTH_SHORT).show()
                                         }
                                         currentlySyncingFile = null
@@ -1594,13 +1599,15 @@ fun SyncScreen(repository: PhotoRepository) {
                     val currentPhoto = photos[pagerState.currentPage]
                     IconButton(
                         onClick = {
-                            Toast.makeText(context, "Uploading ${currentPhoto.name}...", Toast.LENGTH_SHORT).show()
+                            showUploadNotification(context, 1, 1)
                             scope.launch {
                                 val success = repository.syncPhoto(currentPhoto)
                                 if (success) {
                                     sessionManager.updateLastUpload()
+                                    showUploadNotification(context, 1, 1, isFinished = true)
                                     Toast.makeText(context, "Uploaded ${currentPhoto.name}", Toast.LENGTH_SHORT).show()
                                 } else {
+                                    showUploadNotification(context, 1, 1, isFinished = true)
                                     Toast.makeText(context, "Upload failed ${currentPhoto.name}", Toast.LENGTH_SHORT).show()
                                 }
                             }

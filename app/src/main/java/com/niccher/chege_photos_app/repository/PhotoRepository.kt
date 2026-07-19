@@ -9,6 +9,7 @@ import com.niccher.chege_photos_app.models.Photo
 import com.niccher.chege_photos_app.network.ApiClient
 import com.niccher.chege_photos_app.models.PhotoListResponse
 import retrofit2.Response
+import android.util.Log
 import java.io.File
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -73,7 +74,23 @@ class PhotoRepository(private val context: Context) {
     }
 
     suspend fun syncPhoto(file: File, onProgress: ((Float) -> Unit)? = null): Boolean {
-        val baseRequestBody = file.asRequestBody("image/*".toMediaTypeOrNull())
+        val mime = file.extension.lowercase().let { ext ->
+            when (ext) {
+                "jpg", "jpeg" -> "image/jpeg"
+                "png" -> "image/png"
+                "gif" -> "image/gif"
+                "webp" -> "image/webp"
+                "bmp" -> "image/bmp"
+                "heic", "heif" -> "image/heic"
+                "mp4" -> "video/mp4"
+                "mov" -> "video/quicktime"
+                "3gp" -> "video/3gpp"
+                "avi" -> "video/x-msvideo"
+                "mkv" -> "video/x-matroska"
+                else -> "image/jpeg"
+            }
+        }
+        val baseRequestBody = file.asRequestBody(mime.toMediaTypeOrNull())
         val requestFile = if (onProgress != null) {
             com.niccher.chege_photos_app.utils.ProgressRequestBody(baseRequestBody, onProgress)
         } else {
@@ -82,9 +99,15 @@ class PhotoRepository(private val context: Context) {
         val body = MultipartBody.Part.createFormData("file", file.name, requestFile)
         
         return try {
-            val response = ApiClient.getPhotoService(context).uploadPhoto(body)
+            val service = ApiClient.getPhotoService(context)
+            val response = service.uploadPhoto(body)
+            if (!response.isSuccessful) {
+                val errorBody = response.errorBody()?.string() ?: "HTTP ${response.code()}"
+                Log.e("PhotoRepository", "Upload failed: $errorBody")
+            }
             response.isSuccessful
         } catch (e: Exception) {
+            Log.e("PhotoRepository", "Upload exception: ${e.localizedMessage}", e)
             false
         }
     }
