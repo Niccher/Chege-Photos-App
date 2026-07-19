@@ -2,18 +2,27 @@ package com.niccher.chege_photos_app.repository
 
 import android.content.ContentUris
 import android.content.Context
+import android.net.Uri
 import android.provider.MediaStore
+import android.util.Log
 import com.niccher.chege_photos_app.data.AppDatabase
 import com.niccher.chege_photos_app.models.toCachedPhoto
 import com.niccher.chege_photos_app.models.Photo
 import com.niccher.chege_photos_app.network.ApiClient
 import com.niccher.chege_photos_app.models.PhotoListResponse
-import retrofit2.Response
-import android.util.Log
-import java.io.File
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import retrofit2.Response
+import java.io.File
+
+data class LocalPhoto(
+    val uri: Uri,
+    val file: File?,
+    val name: String,
+    val size: Long
+)
 
 class PhotoRepository(private val context: Context) {
     private val database = AppDatabase.getDatabase(context)
@@ -21,9 +30,14 @@ class PhotoRepository(private val context: Context) {
 
     val photosRefreshTrigger = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
-    fun getLocalPhotos(): List<File> {
-        val photos = mutableListOf<File>()
-        val projection = arrayOf(MediaStore.Images.Media.DATA)
+    fun getLocalPhotos(): List<LocalPhoto> {
+        val photos = mutableListOf<LocalPhoto>()
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DATA,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.SIZE
+        )
         val cursor = context.contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             projection,
@@ -33,16 +47,23 @@ class PhotoRepository(private val context: Context) {
         )
 
         cursor?.use {
-            val dataColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
+            val idCol = it.getColumnIndex(MediaStore.Images.Media._ID)
+            val dataCol = it.getColumnIndex(MediaStore.Images.Media.DATA)
+            val nameCol = it.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+            val sizeCol = it.getColumnIndex(MediaStore.Images.Media.SIZE)
             while (it.moveToNext()) {
-                val path = it.getString(dataColumn)
-                if (path != null) {
-                    val file = File(path)
-                    if (file.exists()) photos.add(file)
+                val id = if (idCol >= 0) it.getLong(idCol) else -1L
+                val path = if (dataCol >= 0) it.getString(dataCol) else null
+                val displayName = if (nameCol >= 0) it.getString(nameCol) else "photo_$id.jpg"
+                val fileSize = if (sizeCol >= 0) it.getLong(sizeCol) else 0L
+                val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                val file = if (path != null) File(path) else null
+                if (file?.exists() == true || path != null) {
+                    photos.add(LocalPhoto(uri, file, displayName, fileSize))
                 }
             }
         }
-        
+
         return photos
     }
 
@@ -51,16 +72,13 @@ class PhotoRepository(private val context: Context) {
             val response = ApiClient.getPhotoService(context).getRemotePhotos()
             if (response.isSuccessful) {
                 val remotePhotos = response.body()?.photos ?: emptyList()
-                // Update Cache
                 photoDao.clearAll()
                 photoDao.insertPhotos(remotePhotos.map { it.toCachedPhoto() })
                 remotePhotos
             } else {
-                // Fallback to Cache
                 getCachedPhotos()
             }
         } catch (e: Exception) {
-            // Fallback to Cache
             getCachedPhotos()
         }
     }
@@ -73,8 +91,8 @@ class PhotoRepository(private val context: Context) {
         }
     }
 
-    suspend fun syncPhoto(file: File, onProgress: ((Float) -> Unit)? = null): Boolean {
-        val mime = file.extension.lowercase().let { ext ->
+    suspend fun syncPhoto(photo: LocalPhoto, onProgress: ((Float) -> Unit)? = null): Boolean {
+        val mime = photo.name.substringAfterLast('.', "jpg").lowercase().let { ext ->
             when (ext) {
                 "jpg", "jpeg" -> "image/jpeg"
                 "png" -> "image/png"
@@ -90,15 +108,24 @@ class PhotoRepository(private val context: Context) {
                 else -> "image/jpeg"
             }
         }
-        val baseRequestBody = file.asRequestBody(mime.toMediaTypeOrNull())
-        val requestFile = if (onProgress != null) {
-            com.niccher.chege_photos_app.utils.ProgressRequestBody(baseRequestBody, onProgress)
-        } else {
-            baseRequestBody
-        }
-        val body = MultipartBody.Part.createFormData("file", file.name, requestFile)
-        
+
         return try {
+            val body = if (photo.file?.exists() == true) {
+                val requestBody = photo.file.asRequestBody(mime.toMediaTypeOrNull())
+                val monitoredBody = if (onProgress != null) {
+                    com.niccher.chege_photos_app.utils.ProgressRequestBody(requestBody, onProgress)
+                } else requestBody
+                MultipartBody.Part.createFormData("file", photo.name, monitoredBody)
+            } else {
+                val bytes = context.contentResolver.openInputStream(photo.uri)?.use { it.readBytes() }
+                    ?: return false
+                val requestBody = bytes.toRequestBody(mime.toMediaTypeOrNull())
+                val monitoredBody = if (onProgress != null) {
+                    com.niccher.chege_photos_app.utils.ProgressRequestBody(requestBody, onProgress)
+                } else requestBody
+                MultipartBody.Part.createFormData("file", photo.name, monitoredBody)
+            }
+
             val service = ApiClient.getPhotoService(context)
             val response = service.uploadPhoto(body)
             if (!response.isSuccessful) {

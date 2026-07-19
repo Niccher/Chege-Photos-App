@@ -1406,7 +1406,7 @@ fun DashboardHeader(title: String, onLogout: () -> Unit) {
 fun SyncScreen(repository: PhotoRepository) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val sessionManager = remember { SessionManager(context) }
-    var photos by remember { mutableStateOf(listOf<File>()) }
+    var photos by remember { mutableStateOf(listOf<com.niccher.chege_photos_app.repository.LocalPhoto>()) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
@@ -1420,7 +1420,7 @@ fun SyncScreen(repository: PhotoRepository) {
     var syncOverallProgress by remember { mutableStateOf(0f) }
     var currentFileProgress by remember { mutableStateOf(0f) }
     var processedCount by remember { mutableStateOf(0) }
-    var currentlySyncingFile by remember { mutableStateOf<File?>(null) }
+    var currentlySyncingFile by remember { mutableStateOf<com.niccher.chege_photos_app.repository.LocalPhoto?>(null) }
     
     // State for Fullscreen Carousel
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
@@ -1490,7 +1490,7 @@ fun SyncScreen(repository: PhotoRepository) {
                 ) {
                     Column {
                         AsyncImage(
-                            model = photo,
+                            model = photo.uri,
                             contentDescription = photo.name,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1521,7 +1521,7 @@ fun SyncScreen(repository: PhotoRepository) {
                                     maxLines = 1
                                 )
                                 Text(
-                                    text = formatSize(photo.length()), 
+                                    text = formatSize(photo.size), 
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.Gray
                                 )
@@ -1582,7 +1582,7 @@ fun SyncScreen(repository: PhotoRepository) {
                 ) { page ->
                     val photo = photos[page]
                     AsyncImage(
-                        model = photo,
+                        model = photo.uri,
                         contentDescription = photo.name,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Fit
@@ -1624,21 +1624,22 @@ fun SyncScreen(repository: PhotoRepository) {
                 }
 
                 if (showInfoSheet) {
-                    val currentFile = photos[pagerState.currentPage]
-                    // Convert File to temporary Photo object for the sheet
+                    val currentPhoto = photos[pagerState.currentPage]
                     val tempPhoto = Photo(
-                        filename = currentFile.name,
-                        path = currentFile.absolutePath,
-                        size = currentFile.length().toString(),
-                        taken_at = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(currentFile.lastModified())),
-                        mime_type = if (currentFile.name.lowercase().endsWith(".jpg") || currentFile.name.lowercase().endsWith(".jpeg")) "image/jpeg" 
-                                    else if (currentFile.name.lowercase().endsWith(".png")) "image/png"
-                                    else if (currentFile.name.lowercase().endsWith(".mp4")) "video/mp4"
+                        filename = currentPhoto.name,
+                        path = currentPhoto.file?.absolutePath ?: currentPhoto.uri.toString(),
+                        size = currentPhoto.size.toString(),
+                        taken_at = currentPhoto.file?.let { file ->
+                            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(file.lastModified()))
+                        } ?: java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
+                        mime_type = if (currentPhoto.name.lowercase().endsWith(".jpg") || currentPhoto.name.lowercase().endsWith(".jpeg")) "image/jpeg" 
+                                    else if (currentPhoto.name.lowercase().endsWith(".png")) "image/png"
+                                    else if (currentPhoto.name.lowercase().endsWith(".mp4")) "video/mp4"
                                     else "image/unknown"
                     )
                     PhotoDetailsBottomSheet(
                         photo = tempPhoto,
-                        localFile = currentFile,
+                        localFile = currentPhoto.file,
                         onDismiss = { showInfoSheet = false }
                     )
                 }
@@ -1654,8 +1655,10 @@ fun SyncScreen(repository: PhotoRepository) {
                         .padding(16.dp)
                 ) {
                     Text(text = currentPhoto.name, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-                    Text(text = "Size: ${formatSize(currentPhoto.length())}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                    val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(currentPhoto.lastModified()))
+                    Text(text = "Size: ${formatSize(currentPhoto.size)}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                    val date = currentPhoto.file?.let { file ->
+                        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(file.lastModified()))
+                    } ?: "Unknown"
                     Text(text = "Date: $date", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -1957,6 +1960,17 @@ fun SharedUploadDialog(
     var currentFileProgress by remember { mutableStateOf(0f) }
     val scope = rememberCoroutineScope()
     
+    val localPhotos = remember(files.size) {
+        files.map { file ->
+            com.niccher.chege_photos_app.repository.LocalPhoto(
+                uri = android.net.Uri.fromFile(file),
+                file = file,
+                name = file.name,
+                size = file.length()
+            )
+        }.toMutableList()
+    }
+    
     Dialog(
         onDismissRequest = { if (!isUploading) files.clear() },
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -1975,9 +1989,9 @@ fun SharedUploadDialog(
                             uploadedCount = 0
                             showUploadNotification(context, 0, files.size)
                             scope.launch {
-                                for ((index, file) in files.withIndex()) {
+                                for ((index, localPhoto) in localPhotos.withIndex()) {
                                     showUploadNotification(context, index + 1, files.size)
-                                    val success = repository.syncPhoto(file) { progress ->
+                                    val success = repository.syncPhoto(localPhoto) { progress ->
                                         currentFileProgress = progress
                                     }
                                     if (success) {
