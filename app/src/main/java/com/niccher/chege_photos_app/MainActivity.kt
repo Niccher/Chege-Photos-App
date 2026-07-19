@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import android.widget.Toast
 import android.content.Intent
+import android.app.Activity
 import android.net.Uri
 import android.media.ExifInterface
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -38,16 +39,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.font.FontWeight
 import coil.compose.AsyncImage
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import com.niccher.chege_photos_app.models.Album as PhotoAlbum
 import com.niccher.chege_photos_app.models.PhotoListResponse
 import com.niccher.chege_photos_app.utils.SessionManager
+import com.niccher.chege_photos_app.utils.DeviceFingerprint
 import com.niccher.chege_photos_app.models.AuthResponse
 import com.niccher.chege_photos_app.models.Photo
 import com.niccher.chege_photos_app.network.ApiClient
 import com.niccher.chege_photos_app.repository.PhotoRepository
+import com.niccher.chege_photos_app.repository.PhotoSyncResult
+import kotlinx.serialization.json.Json
 import com.niccher.chege_photos_app.ui.theme.ChegePhotosTheme
 import com.niccher.chege_photos_app.ui.theme.AppTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -237,6 +247,7 @@ fun MainScreen(
 
     LaunchedEffect(Unit) {
         ApiClient.updateBaseUrl(serverUrl, context)
+        DeviceFingerprint.init(context)
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(
                 Manifest.permission.READ_MEDIA_IMAGES, 
@@ -548,7 +559,7 @@ fun MainScreen(
                 ) {
                     LoginScreen(
                         serverUrl = serverUrl,
-                        onUrlChange = { 
+                        onUrlChange = {
                             serverUrl = it
                             sharedPrefs.edit().putString("server_url", it).apply()
                             ApiClient.updateBaseUrl(it, context)
@@ -559,7 +570,8 @@ fun MainScreen(
                         onPasswordChange = { password = it },
                         onLogin = {
                             isLoggedIn = true
-                        }
+                        },
+                        context = context
                     )
                 }
             } else {
@@ -621,6 +633,8 @@ fun RemotePhotoListScreen(
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
     var isSelectionMode by remember { mutableStateOf(false) }
     val selectedPhotos = remember { mutableStateListOf<Photo>() }
+    var showAlbumPicker by remember { mutableStateOf(false) }
+    var albumPickerAlbums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(title) {
@@ -654,104 +668,7 @@ fun RemotePhotoListScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (isSelectionMode) {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp).fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { 
-                            isSelectionMode = false
-                            selectedPhotos.clear()
-                        }) {
-                            Icon(Icons.Default.Close, contentDescription = "Cancel")
-                        }
-                        Text(text = "${selectedPhotos.size} selected", style = MaterialTheme.typography.titleMedium)
-                    }
-                    Row {
-                        IconButton(
-                            enabled = selectedPhotos.isNotEmpty(),
-                            onClick = { 
-                                selectedPhotos.forEach { photo ->
-                                    scope.launch {
-                                        downloadRemotePhoto(context, baseUrl, photo)?.let { id ->
-                                            activeDownloads[id] = photo.path
-                                            downloadProgress[photo.path] = 0f
-                                        }
-                                    }
-                                }
-                                isSelectionMode = false
-                                selectedPhotos.clear()
-                            }
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = "Download All")
-                        }
-                        IconButton(
-                            enabled = selectedPhotos.isNotEmpty(),
-                            onClick = { 
-                                val items = selectedPhotos.toList()
-                                isSelectionMode = false
-                                selectedPhotos.clear()
-                                scope.launch {
-                                    items.forEach { photo ->
-                                        repository.deletePhoto(photo.id ?: "")
-                                    }
-                                    // Re-fetch photos
-                                    isLoading = true
-                                    photos = if (fetchPhotos != null) {
-                                        try {
-                                            val response = fetchPhotos(context)
-                                            if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
-                                        } catch (e: Exception) { emptyList() }
-                                    } else {
-                                        repository.getRemotePhotos()
-                                    }
-                                    isLoading = false
-                                    Toast.makeText(context, if (title == "Trash") "Permanently deleted items" else "Moved items to trash", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = if (title == "Trash") "Delete Permanently" else "Trash All")
-                        }
-                        if (title == "Trash") {
-                            IconButton(
-                                enabled = selectedPhotos.isNotEmpty(),
-                                onClick = { 
-                                    val items = selectedPhotos.toList()
-                                    isSelectionMode = false
-                                    selectedPhotos.clear()
-                                    scope.launch {
-                                        items.forEach { photo ->
-                                            repository.restorePhoto(photo.id ?: "")
-                                        }
-                                        // Re-fetch photos
-                                        isLoading = true
-                                        photos = if (fetchPhotos != null) {
-                                            try {
-                                                val response = fetchPhotos(context)
-                                                if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
-                                            } catch (e: Exception) { emptyList() }
-                                        } else {
-                                            repository.getRemotePhotos()
-                                        }
-                                        isLoading = false
-                                        Toast.makeText(context, "Restored items", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            ) {
-                                Icon(Icons.Default.RestoreFromTrash, contentDescription = "Restore All")
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
+        if (!isSelectionMode) {
             // Search and Filter UI
             Column(
                 modifier = Modifier
@@ -796,132 +713,289 @@ fun RemotePhotoListScreen(
             }
         }
 
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else {
-            if (filteredPhotos.isEmpty()) {
+        Box(modifier = Modifier.weight(1f)) {
+            if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Default.SearchOff, 
-                            contentDescription = null, 
-                            modifier = Modifier.size(64.dp),
-                            tint = Color.Gray
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = if (photos.isEmpty()) "No photos found in $title" else "No photos match your search",
-                            color = Color.Gray
-                        )
-                    }
+                    CircularProgressIndicator()
                 }
             } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxSize().weight(1f),
-                    contentPadding = PaddingValues(4.dp)
-                ) {
-                    itemsIndexed(filteredPhotos) { index, photo ->
-                        val isSelected = selectedPhotos.contains(photo)
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(6.dp)
-                                .combinedClickable(
-                                    onClick = { 
-                                        if (isSelectionMode) {
-                                            if (isSelected) selectedPhotos.remove(photo)
-                                            else selectedPhotos.add(photo)
-                                            if (selectedPhotos.isEmpty()) isSelectionMode = false
-                                        } else {
-                                            selectedPhotoIndex = index 
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (!isSelectionMode) {
-                                            isSelectionMode = true
-                                            selectedPhotos.add(photo)
-                                        }
-                                    }
-                                ),
-                            shape = RoundedCornerShape(16.dp),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                            border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
-                        ) {
-                            Box {
-                                Column {
-                                AsyncImage(
-                                    model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path?.trimStart('/') ?: ""),
-                                    contentDescription = photo.filename,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(150.dp),
-                                    contentScale = ContentScale.Crop
-                                )
-                                
-                                downloadProgress[photo.path]?.let { progress ->
-                                    LinearProgressIndicator(
-                                        progress = progress,
-                                        modifier = Modifier.fillMaxWidth().height(4.dp),
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                
-                                Row(
-                                    modifier = Modifier.padding(8.dp).fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = photo.filename.take(20) + if (photo.filename.length > 20) "..." else "",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            maxLines = 1
-                                        )
-                                        val sizeBytes = photo.size?.toLongOrNull() ?: 0L
-                                        Text(
-                                            text = formatSize(sizeBytes),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color.Gray
-                                        )
-                                    }
-                                    IconButton(
+                if (filteredPhotos.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.SearchOff, 
+                                contentDescription = null, 
+                                modifier = Modifier.size(64.dp),
+                                tint = Color.Gray
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = if (photos.isEmpty()) "No photos found in $title" else "No photos match your search",
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(4.dp)
+                    ) {
+                        itemsIndexed(filteredPhotos) { index, photo ->
+                            val isSelected = selectedPhotos.contains(photo)
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(6.dp)
+                                    .combinedClickable(
                                         onClick = { 
-                                            val id = downloadRemotePhoto(context, baseUrl, photo)
-                                            if (id != null) {
-                                                activeDownloads[id] = photo.path
-                                                downloadProgress[photo.path] = 0f
+                                            if (isSelectionMode) {
+                                                if (isSelected) selectedPhotos.remove(photo)
+                                                else selectedPhotos.add(photo)
+                                                if (selectedPhotos.isEmpty()) isSelectionMode = false
+                                            } else {
+                                                selectedPhotoIndex = index 
                                             }
                                         },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(Icons.Default.Download, contentDescription = "Download")
-                                    }
-                                }
-                                
-                                }
-                                
-                                if (isSelected) {
-                                    Surface(
-                                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                                        color = MaterialTheme.colorScheme.primary,
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = null,
-                                            modifier = Modifier.padding(4.dp).size(16.dp),
-                                            tint = MaterialTheme.colorScheme.onPrimary
+                                        onLongClick = {
+                                            if (!isSelectionMode) {
+                                                isSelectionMode = true
+                                                selectedPhotos.add(photo)
+                                            }
+                                        }
+                                    ),
+                                shape = RoundedCornerShape(16.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
+                            ) {
+                                Box {
+                                    Column {
+                                    AsyncImage(
+                                        model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path?.trimStart('/') ?: ""),
+                                        contentDescription = photo.filename,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(150.dp),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    
+                                    downloadProgress[photo.path]?.let { progress ->
+                                        LinearProgressIndicator(
+                                            progress = progress,
+                                            modifier = Modifier.fillMaxWidth().height(4.dp),
+                                            color = MaterialTheme.colorScheme.primary
                                         )
                                     }
-                                }
+                                    
+                                    Row(
+                                        modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = photo.filename.take(20) + if (photo.filename.length > 20) "..." else "",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                maxLines = 1
+                                            )
+                                            val sizeBytes = photo.size?.toLongOrNull() ?: 0L
+                                            Text(
+                                                text = formatSize(sizeBytes),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color.Gray
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { 
+                                                val id = downloadRemotePhoto(context, baseUrl, photo)
+                                                if (id != null) {
+                                                    activeDownloads[id] = photo.path
+                                                    downloadProgress[photo.path] = 0f
+                                                }
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.Download, contentDescription = "Download")
+                                        }
+                                    }
+                                    
+                                    }
+                                    
+                                    if (isSelected) {
+                                        Surface(
+                                            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.padding(4.dp).size(16.dp),
+                                                tint = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        }
+                                    }
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+        if (isSelectionMode) {
+            Surface(
+                tonalElevation = 8.dp,
+                shadowElevation = 8.dp,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${selectedPhotos.size} selected",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                    IconButton(
+                        enabled = selectedPhotos.isNotEmpty(),
+                        onClick = {
+                            val items = selectedPhotos.toList()
+                            isSelectionMode = false
+                            selectedPhotos.clear()
+                            scope.launch {
+                                items.forEach { photo ->
+                                    repository.favoritePhoto(photo.id ?: "")
+                                }
+                                isLoading = true
+                                photos = if (fetchPhotos != null) {
+                                    try {
+                                        val response = fetchPhotos(context)
+                                        if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
+                                    } catch (e: Exception) { emptyList() }
+                                } else {
+                                    repository.getRemotePhotos()
+                                }
+                                isLoading = false
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.Favorite, contentDescription = "Favorite")
+                    }
+                    IconButton(
+                        enabled = selectedPhotos.isNotEmpty(),
+                        onClick = {
+                            val items = selectedPhotos.toList()
+                            isSelectionMode = false
+                            selectedPhotos.clear()
+                            scope.launch {
+                                items.forEach { photo ->
+                                    repository.archivePhoto(photo.id ?: "")
+                                }
+                                isLoading = true
+                                photos = if (fetchPhotos != null) {
+                                    try {
+                                        val response = fetchPhotos(context)
+                                        if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
+                                    } catch (e: Exception) { emptyList() }
+                                } else {
+                                    repository.getRemotePhotos()
+                                }
+                                isLoading = false
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.Archive, contentDescription = "Archive")
+                    }
+                    IconButton(
+                        enabled = selectedPhotos.isNotEmpty(),
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    val response = ApiClient.getPhotoService(context).getAlbums()
+                                    if (response.isSuccessful) {
+                                        albumPickerAlbums = response.body()?.albums ?: emptyList()
+                                        showAlbumPicker = true
+                                    }
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Failed to load albums", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.CreateNewFolder, contentDescription = "Add to Album")
+                    }
+                    IconButton(
+                        enabled = selectedPhotos.isNotEmpty(),
+                        onClick = {
+                            val items = selectedPhotos.toList()
+                            isSelectionMode = false
+                            selectedPhotos.clear()
+                            scope.launch {
+                                items.forEach { photo ->
+                                    repository.deletePhoto(photo.id ?: "")
+                                }
+                                isLoading = true
+                                photos = if (fetchPhotos != null) {
+                                    try {
+                                        val response = fetchPhotos(context)
+                                        if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
+                                    } catch (e: Exception) { emptyList() }
+                                } else {
+                                    repository.getRemotePhotos()
+                                }
+                                isLoading = false
+                                Toast.makeText(context, if (title == "Trash") "Permanently deleted items" else "Moved items to trash", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = if (title == "Trash") "Delete Permanently" else "Trash All")
+                    }
+                    IconButton(
+                        enabled = selectedPhotos.isNotEmpty(),
+                        onClick = { 
+                            selectedPhotos.forEach { photo ->
+                                scope.launch {
+                                    downloadRemotePhoto(context, baseUrl, photo)?.let { id ->
+                                        activeDownloads[id] = photo.path
+                                        downloadProgress[photo.path] = 0f
+                                    }
+                                }
+                            }
+                            isSelectionMode = false
+                            selectedPhotos.clear()
+                        }
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = "Download All")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAlbumPicker) {
+        AlbumPickerDialog(
+            albums = albumPickerAlbums,
+            selectedCount = selectedPhotos.size,
+            onAlbumSelected = { album ->
+                val items = selectedPhotos.toList()
+                isSelectionMode = false
+                selectedPhotos.clear()
+                showAlbumPicker = false
+                scope.launch {
+                    var added = 0
+                    items.forEach { photo ->
+                        if (repository.addPhotoToAlbum(album.id ?: "", photo.id ?: "")) added++
+                    }
+                    Toast.makeText(context, "Added $added photos to ${album.name}", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = { showAlbumPicker = false }
+        )
     }
 
     // Fullscreen Image Carousel Dialog (updated to use filteredPhotos)
@@ -1053,8 +1127,6 @@ fun RemotePhotoListScreen(
         }
     }
 }
-}
-
 
 @Composable
 fun LoginScreen(
@@ -1064,9 +1136,9 @@ fun LoginScreen(
     onEmailChange: (String) -> Unit,
     password: String,
     onPasswordChange: (String) -> Unit,
-    onLogin: () -> Unit
+    onLogin: () -> Unit,
+    context: Context = androidx.compose.ui.platform.LocalContext.current
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
     val sessionManager = remember { SessionManager(context) }
     val scope = rememberCoroutineScope()
 
@@ -1075,8 +1147,12 @@ fun LoginScreen(
     var showAdvanced by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    var showTokenLogin by remember { mutableStateOf(false) }
+    var tokenInput by remember { mutableStateOf("") }
+    var isTokenLoading by remember { mutableStateOf(false) }
+
+
     Box(modifier = Modifier.fillMaxSize()) {
-        // ── Gradient hero background ─────────────────────────────────────
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1097,7 +1173,6 @@ fun LoginScreen(
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── Branding area ────────────────────────────────────────────
             Spacer(modifier = Modifier.height(56.dp))
             Box(
                 modifier = Modifier
@@ -1129,262 +1204,107 @@ fun LoginScreen(
             )
             Spacer(modifier = Modifier.height(40.dp))
 
-            // ── Login card ───────────────────────────────────────────────
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
-                shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp,
-                shadowElevation = 12.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Sign In",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Enter your credentials to continue",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // ── Server URL (first) ───────────────────────────────
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ) {
-                        Column {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { showAdvanced = !showAdvanced }
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.Settings,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Server Settings",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                                Icon(
-                                    imageVector = if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                )
-                            }
-                            if (showAdvanced) {
-                                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                                OutlinedTextField(
-                                    value = serverUrl,
-                                    onValueChange = onUrlChange,
-                                    label = { Text("Server URL") },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Default.Cloud,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    singleLine = true,
-                                    placeholder = { Text("e.g. 192.168.1.50:2283 or https://photos.example.com") },
-                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
-                                        imeAction = androidx.compose.ui.text.input.ImeAction.Next
-                                    )
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Email field
-                    OutlinedTextField(
-                        value = email,
-                        onValueChange = {
-                            onEmailChange(it)
+            if (!showTokenLogin) {
+                // ── Email/Password login card ────────────────────────────
+                LoginCard(
+                    serverUrl = serverUrl,
+                    onUrlChange = onUrlChange,
+                    email = email,
+                    onEmailChange = onEmailChange,
+                    password = password,
+                    onPasswordChange = onPasswordChange,
+                    isLoading = isLoading,
+                    errorMessage = errorMessage,
+                    passwordVisible = passwordVisible,
+                    showAdvanced = showAdvanced,
+                    onToggleAdvanced = { showAdvanced = !showAdvanced },
+                    onTogglePasswordVisibility = { passwordVisible = !passwordVisible },
+                    onLogin = {
+                        if (email.isBlank()) { errorMessage = "Email is required"; return@LoginCard }
+                        if (password.isBlank()) { errorMessage = "Password is required"; return@LoginCard }
+                        scope.launch {
+                            isLoading = true
                             errorMessage = null
-                        },
-                        label = { Text("Email") },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Email,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        singleLine = true,
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Email,
-                            imeAction = androidx.compose.ui.text.input.ImeAction.Next
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Password field
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = {
-                            onPasswordChange(it)
-                            errorMessage = null
-                        },
-                        label = { Text("Password") },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Lock,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        },
-                        trailingIcon = {
-                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                Icon(
-                                    imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = if (passwordVisible) "Hide password" else "Show password",
-                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                )
-                            }
-                        },
-                        visualTransformation = if (passwordVisible)
-                            androidx.compose.ui.text.input.VisualTransformation.None
-                        else
-                            androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        singleLine = true,
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
-                            imeAction = androidx.compose.ui.text.input.ImeAction.Done
-                        )
-                    )
-
-
-                    // Error message
-                    if (errorMessage != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Default.ErrorOutline,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = errorMessage!!,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // Login button
-                    Button(
-                        onClick = {
-                            if (email.isBlank()) { errorMessage = "Email is required"; return@Button }
-                            if (password.isBlank()) { errorMessage = "Password is required"; return@Button }
-                            scope.launch {
-                                isLoading = true
-                                errorMessage = null
-                                try {
-                                    val response = ApiClient.getPhotoService(context).login(email, password)
-                                    if (response.isSuccessful) {
-                                        val authData = response.body()
-                                        authData?.access_token?.let {
-                                            sessionManager.saveAuthToken(it)
-                                            authData.user?.let { user ->
-                                                sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
-                                                sessionManager.updateLastLogin()
-                                            }
-                                            onLogin()
-                                            Toast.makeText(context, "Welcome back!", Toast.LENGTH_SHORT).show()
-                                        } ?: run {
-                                            errorMessage = "Invalid response from server"
+                            try {
+                                val deviceId = DeviceFingerprint.getDeviceId(context)
+                                val response = ApiClient.getPhotoService(context).login(email, password, deviceId = deviceId)
+                                if (response.isSuccessful) {
+                                    val authData = response.body()
+                                    authData?.access_token?.let {
+                                        sessionManager.saveAuthToken(it)
+                                        authData.user?.let { user ->
+                                            sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
+                                            sessionManager.updateLastLogin()
                                         }
-                                    } else {
-                                        errorMessage = "Login failed: ${response.message()}"
+                                        onLogin()
+                                        Toast.makeText(context, "Welcome back!", Toast.LENGTH_SHORT).show()
+                                    } ?: run {
+                                        errorMessage = "Invalid response from server"
                                     }
-                                } catch (e: Exception) {
-                                    errorMessage = "Cannot reach server. Check your URL."
-                                } finally {
-                                    isLoading = false
+                                } else {
+                                    errorMessage = "Login failed: ${response.message()}"
                                 }
+                            } catch (e: Exception) {
+                                errorMessage = "Cannot reach server. Check your URL."
+                            } finally {
+                                isLoading = false
                             }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        enabled = !isLoading
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Signing in…")
-                        } else {
-                            Icon(
-                                Icons.Default.Login,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Sign In",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
-                            )
                         }
-                    }
-                }
+                    },
+                    onSwitchToToken = { showTokenLogin = true }
+                )
+            } else {
+                // ── Token login card ─────────────────────────────────────
+                TokenLoginCard(
+                    token = tokenInput,
+                    onTokenChange = { tokenInput = it; errorMessage = null },
+                    isLoading = isTokenLoading,
+                    errorMessage = errorMessage,
+                    onLogin = {
+                        val trimmed = tokenInput.trim().uppercase()
+                        if (trimmed.length != 8) {
+                            errorMessage = "Token must be 8 characters"
+                            return@TokenLoginCard
+                        }
+                        scope.launch {
+                            isTokenLoading = true
+                            errorMessage = null
+                            try {
+                                val deviceId = DeviceFingerprint.getDeviceId(context)
+                                val fingerprint = DeviceFingerprint.getFingerprint()
+                                val response = ApiClient.getPhotoService(context).authWithToken(
+                                    token = trimmed,
+                                    deviceId = deviceId,
+                                    deviceFingerprint = fingerprint
+                                )
+                                if (response.isSuccessful) {
+                                    val authData = response.body()
+                                    authData?.access_token?.let {
+                                        sessionManager.saveAuthToken(it)
+                                        authData.user?.let { user ->
+                                            sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
+                                            sessionManager.updateLastLogin()
+                                        }
+                                        onLogin()
+                                        Toast.makeText(context, "Authenticated with token!", Toast.LENGTH_SHORT).show()
+                                    } ?: run {
+                                        errorMessage = "Invalid response from server"
+                                    }
+                                } else {
+                                    errorMessage = "Token auth failed: Invalid or used token"
+                                }
+                            } catch (e: Exception) {
+                                errorMessage = "Cannot reach server. Check your URL."
+                            } finally {
+                                isTokenLoading = false
+                            }
+                        }
+                    },
+                    onSwitchToEmail = { showTokenLogin = false }
+                )
             }
 
             Spacer(modifier = Modifier.height(32.dp))
-
-            // Footer hint
             Text(
                 text = "Connect to your self-hosted server",
                 style = MaterialTheme.typography.bodySmall,
@@ -1398,10 +1318,254 @@ fun LoginScreen(
 }
 
 @Composable
-fun DashboardHeader(title: String, onLogout: () -> Unit) {
-    // This is now replaced by TopAppBar in Scaffold
+private fun LoginCard(
+    serverUrl: String,
+    onUrlChange: (String) -> Unit,
+    email: String,
+    onEmailChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    isLoading: Boolean,
+    errorMessage: String?,
+    passwordVisible: Boolean,
+    showAdvanced: Boolean,
+    onToggleAdvanced: () -> Unit,
+    onTogglePasswordVisibility: () -> Unit,
+    onLogin: () -> Unit,
+    onSwitchToToken: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 6.dp,
+        shadowElevation = 12.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Sign In", style = MaterialTheme.typography.titleLarge,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface)
+            Spacer(Modifier.height(4.dp))
+            Text("Enter your credentials to continue",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            Spacer(Modifier.height(24.dp))
+
+            ServerSettingsSection(serverUrl, onUrlChange, showAdvanced, onToggleAdvanced)
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = email, onValueChange = onEmailChange,
+                label = { Text("Email") },
+                leadingIcon = { Icon(Icons.Default.Email, null, tint = MaterialTheme.colorScheme.primary) },
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next)
+            )
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = password, onValueChange = onPasswordChange,
+                label = { Text("Password") },
+                leadingIcon = { Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.primary) },
+                trailingIcon = {
+                    IconButton(onClick = onTogglePasswordVisibility) {
+                        Icon(if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+                    }
+                },
+                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done)
+            )
+
+            ErrorBanner(errorMessage)
+
+            Spacer(Modifier.height(24.dp))
+
+            Button(
+                onClick = onLogin,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(16.dp), enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp)); Text("Signing in…")
+                } else {
+                    Icon(Icons.Default.Login, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Sign In", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            TextButton(onClick = onSwitchToToken) {
+                Icon(Icons.Default.Key, null, Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Login with Token")
+            }
+        }
+    }
 }
 
+@Composable
+private fun TokenLoginCard(
+    token: String,
+    onTokenChange: (String) -> Unit,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onLogin: () -> Unit,
+    onSwitchToEmail: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val scanLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.getStringExtra("SCAN_RESULT")?.let { scanned ->
+                onTokenChange(scanned.trim().take(8).uppercase())
+                Toast.makeText(context, "QR scanned!", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 6.dp, shadowElevation = 12.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Token Login", style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            Spacer(Modifier.height(4.dp))
+            Text("Enter the 8-character token from your web settings or scan the QR code",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            Spacer(Modifier.height(24.dp))
+
+            OutlinedTextField(
+                value = token, onValueChange = { onTokenChange(it.take(8).uppercase()) },
+                label = { Text("Token") },
+                leadingIcon = { Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.primary) },
+                trailingIcon = {
+                    IconButton(onClick = {
+                        val intent = android.content.Intent(context, QrScannerActivity::class.java)
+                        scanLauncher.launch(intent)
+                    }) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR", tint = MaterialTheme.colorScheme.primary)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), singleLine = true,
+                placeholder = { Text("e.g. A1B2C3D4") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done)
+            )
+
+            ErrorBanner(errorMessage)
+
+            Spacer(Modifier.height(24.dp))
+
+            Button(
+                onClick = onLogin,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(16.dp), enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp)); Text("Authenticating…")
+                } else {
+                    Icon(Icons.Default.Key, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Authenticate", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            TextButton(onClick = onSwitchToEmail) {
+                Icon(Icons.Default.Login, null, Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Login with Email")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServerSettingsSection(
+    serverUrl: String,
+    onUrlChange: (String) -> Unit,
+    showAdvanced: Boolean,
+    onToggle: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(onClick = onToggle)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Server Settings", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                }
+                Icon(if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null,
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+            if (showAdvanced) {
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                OutlinedTextField(
+                    value = serverUrl, onValueChange = onUrlChange,
+                    label = { Text("Server URL") },
+                    leadingIcon = { Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.primary) },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    shape = RoundedCornerShape(12.dp), singleLine = true,
+                    placeholder = { Text("e.g. 192.168.1.50:2283 or https://photos.example.com") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ErrorBanner(errorMessage: String?) {
+    if (errorMessage != null) {
+        Spacer(Modifier.height(8.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.errorContainer,
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.ErrorOutline, null, tint = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(errorMessage, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SyncScreen(repository: PhotoRepository) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -1421,11 +1585,9 @@ fun SyncScreen(repository: PhotoRepository) {
     var processedCount by remember { mutableStateOf(0) }
     var currentlySyncingFile by remember { mutableStateOf<com.niccher.chege_photos_app.repository.LocalPhoto?>(null) }
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
-    var selectMode by remember { mutableStateOf(false) }
     var selectedIndices by remember { mutableStateOf(setOf<Int>()) }
-    var showLogsDialog by remember { mutableStateOf(false) }
 
-    val targetPhotos = if (selectMode && selectedIndices.isNotEmpty()) {
+    val targetPhotos = if (selectedIndices.isNotEmpty()) {
         selectedIndices.sorted().map { photos[it] }
     } else {
         photos
@@ -1450,10 +1612,10 @@ fun SyncScreen(repository: PhotoRepository) {
                         for ((index, photo) in batch.withIndex()) {
                             currentlySyncingFile = photo
                             showUploadNotification(context, index + 1, batch.size)
-                            val success = repository.syncPhoto(photo) { progress ->
+                            val result = repository.syncPhoto(photo) { progress ->
                                 currentFileProgress = progress
                             }
-                            if (success) {
+                            if (result is PhotoSyncResult.Success) {
                                 processedCount++
                                 sessionManager.updateLastUpload()
                             }
@@ -1462,29 +1624,22 @@ fun SyncScreen(repository: PhotoRepository) {
                         }
                         isSyncing = false
                         showUploadNotification(context, processedCount, batch.size, isFinished = true)
-                        val label = if (selectMode) "selected" else "local"
+                        val label = if (selectedIndices.isNotEmpty()) "selected" else "local"
                         Toast.makeText(context, "Synced $processedCount out of ${batch.size} $label photos", Toast.LENGTH_SHORT).show()
+                        selectedIndices = emptySet()
                     }
                 }
             ) {
-                val label = if (selectMode && selectedIndices.isNotEmpty()) "Upload Selected (${selectedIndices.size})"
+                val label = if (selectedIndices.isNotEmpty()) "Upload Selected (${selectedIndices.size})"
                             else if (isSyncing) "Syncing... ($processedCount/${targetPhotos.size})"
                             else "Sync Now (${photos.size} local)"
                 Text(label)
             }
 
-            OutlinedButton(
-                onClick = {
-                    selectMode = !selectMode
-                    if (!selectMode) selectedIndices = emptySet()
-                },
-                enabled = !isSyncing
-            ) {
-                Text(if (selectMode) "Cancel" else "Select")
-            }
-
-            OutlinedButton(onClick = { showLogsDialog = true }) {
-                Icon(Icons.Default.List, contentDescription = "Logs", modifier = Modifier.size(18.dp))
+            if (selectedIndices.isNotEmpty()) {
+                OutlinedButton(onClick = { selectedIndices = emptySet() }, enabled = !isSyncing) {
+                    Text("Cancel (${selectedIndices.size})")
+                }
             }
         }
 
@@ -1518,13 +1673,18 @@ fun SyncScreen(repository: PhotoRepository) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(4.dp)
-                        .clickable {
-                            if (selectMode) {
-                                selectedIndices = if (isSelected) selectedIndices - index else selectedIndices + index
-                            } else {
-                                selectedPhotoIndex = index
+                        .combinedClickable(
+                            onClick = {
+                                if (selectedIndices.isNotEmpty()) {
+                                    selectedIndices = if (isSelected) selectedIndices - index else selectedIndices + index
+                                } else {
+                                    selectedPhotoIndex = index
+                                }
+                            },
+                            onLongClick = {
+                                selectedIndices = selectedIndices + index
                             }
-                        },
+                        ),
                     colors = if (isSelected) CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer
                     ) else CardDefaults.cardColors()
@@ -1539,26 +1699,21 @@ fun SyncScreen(repository: PhotoRepository) {
                             contentScale = ContentScale.Crop
                         )
 
-                        // Checkbox overlay in select mode
-                        if (selectMode) {
+                        // Checkbox overlay when selected
+                        if (isSelected) {
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
                                     .padding(6.dp)
                                     .size(28.dp)
                                     .background(
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.4f),
+                                        color = MaterialTheme.colorScheme.primary,
                                         shape = CircleShape
-                                    )
-                                    .clickable {
-                                        selectedIndices = if (isSelected) selectedIndices - index else selectedIndices + index
-                                    },
+                                    ),
                                 contentAlignment = Alignment.Center
                             ) {
-                                if (isSelected) {
-                                    Icon(Icons.Default.Check, contentDescription = "Selected",
-                                        tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
-                                }
+                                Icon(Icons.Default.Check, contentDescription = "Selected",
+                                    tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
                             }
                         }
                     }
@@ -1591,22 +1746,23 @@ fun SyncScreen(repository: PhotoRepository) {
                                 color = Color.Gray
                             )
                         }
-                        if (!selectMode) {
+                        if (selectedIndices.isEmpty()) {
                             IconButton(
                                 onClick = {
                                     showUploadNotification(context, 1, 1)
                                     scope.launch {
                                         currentlySyncingFile = photo
-                                        val success = repository.syncPhoto(photo) { progress ->
+                                        val result = repository.syncPhoto(photo) { progress ->
                                             currentFileProgress = progress
                                         }
-                                        if (success) {
+                                        if (result is PhotoSyncResult.Success) {
                                             sessionManager.updateLastUpload()
                                             showUploadNotification(context, 1, 1, isFinished = true)
                                             Toast.makeText(context, "Uploaded ${photo.name}", Toast.LENGTH_SHORT).show()
                                         } else {
                                             showUploadNotification(context, 1, 1, isFinished = true)
-                                            Toast.makeText(context, "Upload failed ${photo.name}", Toast.LENGTH_SHORT).show()
+                                            val errMsg = (result as? PhotoSyncResult.Error)?.message ?: "Unknown error"
+                                            Toast.makeText(context, "Upload failed: $errMsg", Toast.LENGTH_LONG).show()
                                         }
                                         currentlySyncingFile = null
                                         currentFileProgress = 0f
@@ -1621,11 +1777,6 @@ fun SyncScreen(repository: PhotoRepository) {
                 }
             }
         }
-    }
-
-    // ── Logs Dialog ───────────────────────────────────────────────
-    if (showLogsDialog) {
-        LogsDialog(onDismiss = { showLogsDialog = false })
     }
 
     // Fullscreen Image Carousel Dialog for Local Photos
@@ -1672,14 +1823,15 @@ fun SyncScreen(repository: PhotoRepository) {
                         onClick = {
                             showUploadNotification(context, 1, 1)
                             scope.launch {
-                                val success = repository.syncPhoto(currentPhoto)
-                                if (success) {
+                                val result = repository.syncPhoto(currentPhoto)
+                                if (result is PhotoSyncResult.Success) {
                                     sessionManager.updateLastUpload()
                                     showUploadNotification(context, 1, 1, isFinished = true)
                                     Toast.makeText(context, "Uploaded ${currentPhoto.name}", Toast.LENGTH_SHORT).show()
                                 } else {
                                     showUploadNotification(context, 1, 1, isFinished = true)
-                                    Toast.makeText(context, "Upload failed ${currentPhoto.name}", Toast.LENGTH_SHORT).show()
+                                    val errMsg = (result as? PhotoSyncResult.Error)?.message ?: "Unknown error"
+                                    Toast.makeText(context, "Upload failed: $errMsg", Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
@@ -2062,10 +2214,10 @@ fun SharedUploadDialog(
                             scope.launch {
                                 for ((index, localPhoto) in localPhotos.withIndex()) {
                                     showUploadNotification(context, index + 1, files.size)
-                                    val success = repository.syncPhoto(localPhoto) { progress ->
+                                    val result = repository.syncPhoto(localPhoto) { progress ->
                                         currentFileProgress = progress
                                     }
-                                    if (success) {
+                                    if (result is PhotoSyncResult.Success) {
                                         uploadedCount++
                                         sessionManager.updateLastUpload()
                                     }
@@ -2361,6 +2513,43 @@ fun PhotoDetailsBottomSheet(
             } catch (e: Exception) {
                 ExifInfo()
             }
+        } else if (photo.exif_data != null) {
+            try {
+                val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                val exif = json.decodeFromString<Map<String, kotlinx.serialization.json.JsonElement>>(photo.exif_data)
+
+                fun safeGetString(key: String, fallback: String? = null): String? {
+                    val el = exif[key] ?: return fallback
+                    return when (el) {
+                        is kotlinx.serialization.json.JsonPrimitive -> el.content
+                        else -> el.toString()
+                    }
+                }
+
+                fun rational(v: String?): String? {
+                    if (v == null) return null
+                    val parts = v.split("/")
+                    if (parts.size == 2) {
+                        val n = parts[0].toDoubleOrNull() ?: return v
+                        val d = parts[1].toDoubleOrNull() ?: return v
+                        return if (d != 0.0) (n / d).toString() else v
+                    }
+                    return v
+                }
+                ExifInfo(
+                    camera = safeGetString("Model") ?: safeGetString("Make") ?: "Smartphone Camera",
+                    iso = safeGetString("ISOSpeedRatings") ?: "100",
+                    shutter = rational(safeGetString("ExposureTime"))?.let { "${it}s" } ?: "1/120s",
+                    aperture = rational(safeGetString("FNumber"))?.let { "f/$it" } ?: "f/1.8",
+                    latitude = photo.latitude?.toDoubleOrNull(),
+                    longitude = photo.longitude?.toDoubleOrNull()
+                )
+            } catch (e: Exception) {
+                ExifInfo(
+                    latitude = photo.latitude?.toDoubleOrNull(),
+                    longitude = photo.longitude?.toDoubleOrNull()
+                )
+            }
         } else {
             ExifInfo(
                 latitude = photo.latitude?.toDoubleOrNull(),
@@ -2486,68 +2675,6 @@ fun MetadataRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: St
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
-        }
-    }
-}
-
-@Composable
-fun LogsDialog(onDismiss: () -> Unit) {
-    val logs = remember { com.niccher.chege_photos_app.utils.LogBuffer.getLogs() }
-    var refresh by remember { mutableIntStateOf(0) }
-
-    LaunchedEffect(refresh) {
-        while (true) {
-            delay(1000)
-            refresh++
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Upload Logs", style = MaterialTheme.typography.titleLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { com.niccher.chege_photos_app.utils.LogBuffer.clear() }) {
-                            Text("Clear")
-                        }
-                        Button(onClick = onDismiss) {
-                            Text("Close")
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(8.dp))
-
-                val currentLogs = remember(refresh) { com.niccher.chege_photos_app.utils.LogBuffer.getLogs() }
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    itemsIndexed(currentLogs) { _, line ->
-                        Text(
-                            text = line,
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            modifier = Modifier.padding(vertical = 1.dp, horizontal = 4.dp)
-                        )
-                    }
-                    if (currentLogs.isEmpty()) {
-                        item {
-                            Text("No logs yet. Try uploading a photo.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.Gray,
-                                modifier = Modifier.padding(16.dp))
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -2849,6 +2976,66 @@ fun AboutScreen(version: String) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
             )
             Spacer(modifier = Modifier.height(80.dp)) // Extra space for bottom bar
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AlbumPickerDialog(
+    albums: List<PhotoAlbum>,
+    selectedCount: Int,
+    onAlbumSelected: (PhotoAlbum) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            tonalElevation = 8.dp
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "Add $selectedCount photos to album",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                if (albums.isEmpty()) {
+                    Text(
+                        "No albums found. Create one in the Albums tab first.",
+                        color = Color.Gray,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                        items(albums) { album ->
+                            Surface(
+                                onClick = { onAlbumSelected(album) },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.PhotoAlbum, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(album.name ?: "Untitled", style = MaterialTheme.typography.bodyMedium)
+                                        album.photo_count?.let {
+                                            Text("$it photos", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Cancel")
+                }
+            }
         }
     }
 }

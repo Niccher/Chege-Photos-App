@@ -18,6 +18,16 @@ interface PhotoService {
     suspend fun login(
         @Field("email") email: String,
         @Field("password") password: String,
+        @Field("device_name") deviceName: String = "Android Device",
+        @Field("device_id") deviceId: String = ""
+    ): Response<AuthResponse>
+
+    @POST("api/auth-with-token")
+    @FormUrlEncoded
+    suspend fun authWithToken(
+        @Field("token") token: String,
+        @Field("device_id") deviceId: String,
+        @Field("device_fingerprint") deviceFingerprint: String,
         @Field("device_name") deviceName: String = "Android Device"
     ): Response<AuthResponse>
 
@@ -48,7 +58,8 @@ interface PhotoService {
     @Multipart
     @POST("api/upload")
     suspend fun uploadPhoto(
-        @Part file: MultipartBody.Part
+        @Part file: MultipartBody.Part,
+        @Part deviceId: MultipartBody.Part
     ): Response<AuthResponse>
 
     @POST("photos/delete/{id}")
@@ -81,5 +92,12 @@ interface PhotoService {
     @DELETE("api/albums/{id}")
     suspend fun deleteAlbum(
         @Path("id") id: String
+    ): Response<AuthResponse>
+
+    @FormUrlEncoded
+    @POST("albums/add-photo")
+    suspend fun addPhotoToAlbum(
+        @Field("album_id") albumId: String,
+        @Field("photo_id") photoId: String
     ): Response<AuthResponse>
 }

@@ -1,6 +1,8 @@
 package com.niccher.chege_photos_app.data
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.niccher.chege_photos_app.models.CachedPhoto
 import kotlinx.coroutines.flow.Flow
 
@@ -22,7 +24,7 @@ interface PhotoDao {
     suspend fun getPhotoById(id: Int): CachedPhoto?
 }
 
-@Database(entities = [CachedPhoto::class], version = 1)
+@Database(entities = [CachedPhoto::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
 
@@ -30,13 +32,20 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cached_photos ADD COLUMN exif_data TEXT DEFAULT NULL")
+            }
+        }
+
         fun getDatabase(context: android.content.Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "photo_database"
-                ).build()
+                ).addMigrations(MIGRATION_1_2)
+                    .build()
                 INSTANCE = instance
                 instance
             }

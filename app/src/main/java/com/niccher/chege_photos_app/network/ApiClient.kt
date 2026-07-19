@@ -9,7 +9,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
-import com.niccher.chege_photos_app.utils.LogBuffer
 import java.net.InetAddress
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
@@ -27,8 +26,7 @@ object ApiClient {
     }
 
     private val logging = HttpLoggingInterceptor { msg ->
-        android.util.Log.d("OkHttp", msg)
-        com.niccher.chege_photos_app.utils.LogBuffer.add(msg)
+        android.util.Log.v("OKHTTP", msg)
     }.apply {
         level = HttpLoggingInterceptor.Level.BODY
     }

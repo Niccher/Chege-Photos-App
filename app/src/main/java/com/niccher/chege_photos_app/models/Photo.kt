@@ -17,6 +17,7 @@ data class Photo(
     val mime_type: String? = null,
     val latitude: String? = null,
     val longitude: String? = null,
+    val exif_data: String? = null,
     val is_archived: String? = null,
     val is_favorite: String? = null,
     val is_deleted: String? = null,

@@ -10,12 +10,18 @@ import com.niccher.chege_photos_app.models.toCachedPhoto
 import com.niccher.chege_photos_app.models.Photo
 import com.niccher.chege_photos_app.network.ApiClient
 import com.niccher.chege_photos_app.models.PhotoListResponse
+import com.niccher.chege_photos_app.utils.DeviceFingerprint
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.Response
 import java.io.File
+
+sealed class PhotoSyncResult {
+    data object Success : PhotoSyncResult()
+    data class Error(val message: String) : PhotoSyncResult()
+}
 
 data class LocalPhoto(
     val uri: Uri,
@@ -91,7 +97,11 @@ class PhotoRepository(private val context: Context) {
         }
     }
 
-    suspend fun syncPhoto(photo: LocalPhoto, onProgress: ((Float) -> Unit)? = null): Boolean {
+    suspend fun syncPhoto(photo: LocalPhoto, onProgress: ((Float) -> Unit)? = null): PhotoSyncResult {
+        val tag = "UPLOAD"
+        Log.v(tag, "=== START upload: ${photo.name} (${photo.size} bytes) ===")
+        Log.v(tag, "File exists: ${photo.file?.exists()}, URI: ${photo.uri}")
+
         val mime = photo.name.substringAfterLast('.', "jpg").lowercase().let { ext ->
             when (ext) {
                 "jpg", "jpeg" -> "image/jpeg"
@@ -108,17 +118,24 @@ class PhotoRepository(private val context: Context) {
                 else -> "image/jpeg"
             }
         }
+        Log.v(tag, "MIME: $mime")
 
         return try {
             val body = if (photo.file?.exists() == true) {
+                Log.v(tag, "Reading from file: ${photo.file?.absolutePath}")
                 val requestBody = photo.file.asRequestBody(mime.toMediaTypeOrNull())
                 val monitoredBody = if (onProgress != null) {
                     com.niccher.chege_photos_app.utils.ProgressRequestBody(requestBody, onProgress)
                 } else requestBody
                 MultipartBody.Part.createFormData("file", photo.name, monitoredBody)
             } else {
+                Log.v(tag, "Reading from content URI")
                 val bytes = context.contentResolver.openInputStream(photo.uri)?.use { it.readBytes() }
-                    ?: return false
+                    ?: run {
+                        Log.e(tag, "Failed to read input stream for ${photo.uri}")
+                        return PhotoSyncResult.Error("Failed to read input stream for ${photo.uri}")
+                    }
+                Log.v(tag, "Read ${bytes.size} bytes from URI")
                 val requestBody = bytes.toRequestBody(mime.toMediaTypeOrNull())
                 val monitoredBody = if (onProgress != null) {
                     com.niccher.chege_photos_app.utils.ProgressRequestBody(requestBody, onProgress)
@@ -126,16 +143,42 @@ class PhotoRepository(private val context: Context) {
                 MultipartBody.Part.createFormData("file", photo.name, monitoredBody)
             }
 
+            val deviceId = DeviceFingerprint.getDeviceId(context)
+            val deviceIdPart = MultipartBody.Part.createFormData("device_id", deviceId)
+            Log.v(tag, "Device ID: $deviceId")
+
             val service = ApiClient.getPhotoService(context)
-            val response = service.uploadPhoto(body)
+            Log.d(tag, "Sending POST api/upload for ${photo.name}...")
+            val response = service.uploadPhoto(body, deviceIdPart)
+            Log.d(tag, "Response HTTP ${response.code()}: ${response.message()}")
+
+            val bodyStr = response.body()?.let { 
+                kotlinx.serialization.json.Json { ignoreUnknownKeys = true; coerceInputValues = true }
+                    .encodeToString(kotlinx.serialization.serializer<com.niccher.chege_photos_app.models.AuthResponse>(), it)
+            } ?: "null"
+            Log.v(tag, "Response body: $bodyStr")
+
             if (!response.isSuccessful) {
                 val errorBody = response.errorBody()?.string() ?: "HTTP ${response.code()}"
-                Log.e("PhotoRepository", "Upload failed: $errorBody")
+                Log.e(tag, "Upload FAILED: $errorBody")
+                PhotoSyncResult.Error(errorBody)
+            } else {
+                val authResponse = response.body()
+                val status = authResponse?.status ?: "unknown"
+                Log.d(tag, "Upload result status: $status")
+                if (status == "success") {
+                    val msg = authResponse?.messageText ?: "OK"
+                    Log.i(tag, "Upload SUCCESS: ${photo.name} — $msg")
+                    PhotoSyncResult.Success
+                } else {
+                    val errMsg = authResponse?.messageText ?: "Unknown error"
+                    Log.w(tag, "Upload returned error status: $errMsg")
+                    PhotoSyncResult.Error(errMsg)
+                }
             }
-            response.isSuccessful
         } catch (e: Exception) {
-            Log.e("PhotoRepository", "Upload exception: ${e.localizedMessage}", e)
-            false
+            Log.e(tag, "Upload EXCEPTION for ${photo.name}: ${e.localizedMessage}", e)
+            PhotoSyncResult.Error(e.localizedMessage ?: "Unknown exception")
         }
     }
 
@@ -190,6 +233,14 @@ class PhotoRepository(private val context: Context) {
     suspend fun deleteAlbum(id: String): Boolean {
         return try {
             ApiClient.getPhotoService(context).deleteAlbum(id).isSuccessful
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun addPhotoToAlbum(albumId: String, photoId: String): Boolean {
+        return try {
+            ApiClient.getPhotoService(context).addPhotoToAlbum(albumId, photoId).isSuccessful
         } catch (e: Exception) {
             false
         }
