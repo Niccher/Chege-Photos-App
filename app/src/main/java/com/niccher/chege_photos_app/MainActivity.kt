@@ -1417,28 +1417,39 @@ fun SyncScreen(repository: PhotoRepository) {
     }
 
     var isSyncing by remember { mutableStateOf(false) }
-    var syncOverallProgress by remember { mutableStateOf(0f) }
     var currentFileProgress by remember { mutableStateOf(0f) }
     var processedCount by remember { mutableStateOf(0) }
     var currentlySyncingFile by remember { mutableStateOf<com.niccher.chege_photos_app.repository.LocalPhoto?>(null) }
-    
-    // State for Fullscreen Carousel
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
+    var selectMode by remember { mutableStateOf(false) }
+    var selectedIndices by remember { mutableStateOf(setOf<Int>()) }
+    var showLogsDialog by remember { mutableStateOf(false) }
+
+    val targetPhotos = if (selectMode && selectedIndices.isNotEmpty()) {
+        selectedIndices.sorted().map { photos[it] }
+    } else {
+        photos
+    }
 
     Column {
-        Button(
+        // ── Top action bar ─────────────────────────────────────────
+        Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            enabled = !isSyncing,
-            onClick = {
-                if (photos.isNotEmpty()) {
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                modifier = Modifier.weight(1f),
+                enabled = !isSyncing && photos.isNotEmpty(),
+                onClick = {
                     isSyncing = true
                     processedCount = 0
                     currentFileProgress = 0f
+                    val batch = targetPhotos
                     scope.launch {
-                        showUploadNotification(context, 0, photos.size)
-                        for ((index, photo) in photos.withIndex()) {
+                        showUploadNotification(context, 0, batch.size)
+                        for ((index, photo) in batch.withIndex()) {
                             currentlySyncingFile = photo
-                            showUploadNotification(context, index + 1, photos.size)
+                            showUploadNotification(context, index + 1, batch.size)
                             val success = repository.syncPhoto(photo) { progress ->
                                 currentFileProgress = progress
                             }
@@ -1450,17 +1461,36 @@ fun SyncScreen(repository: PhotoRepository) {
                             currentlySyncingFile = null
                         }
                         isSyncing = false
-                        showUploadNotification(context, processedCount, photos.size, isFinished = true)
-                        Toast.makeText(context, "Synced $processedCount out of ${photos.size} photos", Toast.LENGTH_SHORT).show()
+                        showUploadNotification(context, processedCount, batch.size, isFinished = true)
+                        val label = if (selectMode) "selected" else "local"
+                        Toast.makeText(context, "Synced $processedCount out of ${batch.size} $label photos", Toast.LENGTH_SHORT).show()
                     }
                 }
+            ) {
+                val label = if (selectMode && selectedIndices.isNotEmpty()) "Upload Selected (${selectedIndices.size})"
+                            else if (isSyncing) "Syncing... ($processedCount/${targetPhotos.size})"
+                            else "Sync Now (${photos.size} local)"
+                Text(label)
             }
-        ) {
-            Text(if (isSyncing) "Syncing... ($processedCount/${photos.size})" else "Sync Now (${photos.size} local photos)")
+
+            OutlinedButton(
+                onClick = {
+                    selectMode = !selectMode
+                    if (!selectMode) selectedIndices = emptySet()
+                },
+                enabled = !isSyncing
+            ) {
+                Text(if (selectMode) "Cancel" else "Select")
+            }
+
+            OutlinedButton(onClick = { showLogsDialog = true }) {
+                Icon(Icons.Default.List, contentDescription = "Logs", modifier = Modifier.size(18.dp))
+            }
         }
 
+        // ── Progress ──────────────────────────────────────────────
         if (isSyncing) {
-            val overallProgress = if (photos.isNotEmpty()) (processedCount.toFloat() + currentFileProgress) / photos.size else 0f
+            val overallProgress = if (targetPhotos.isNotEmpty()) (processedCount.toFloat() + currentFileProgress) / targetPhotos.size else 0f
             Column(modifier = Modifier.padding(vertical = 8.dp)) {
                 LinearProgressIndicator(
                     progress = overallProgress,
@@ -1476,19 +1506,30 @@ fun SyncScreen(repository: PhotoRepository) {
             }
         }
 
+        // ── Photo grid ────────────────────────────────────────────
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(4.dp)
         ) {
             itemsIndexed(photos) { index, photo ->
+                val isSelected = index in selectedIndices
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(4.dp)
-                        .clickable { selectedPhotoIndex = index }
+                        .clickable {
+                            if (selectMode) {
+                                selectedIndices = if (isSelected) selectedIndices - index else selectedIndices + index
+                            } else {
+                                selectedPhotoIndex = index
+                            }
+                        },
+                    colors = if (isSelected) CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    ) else CardDefaults.cardColors()
                 ) {
-                    Column {
+                    Box {
                         AsyncImage(
                             model = photo.uri,
                             contentDescription = photo.name,
@@ -1497,35 +1538,60 @@ fun SyncScreen(repository: PhotoRepository) {
                                 .height(150.dp),
                             contentScale = ContentScale.Crop
                         )
-                        
-                        // Per-item Sync Progress
-                        if (currentlySyncingFile == photo || isSyncing && photo in photos.take(processedCount)) {
-                            val progress = if (currentlySyncingFile == photo) currentFileProgress else 1f
-                            LinearProgressIndicator(
-                                progress = progress,
-                                modifier = Modifier.fillMaxWidth().height(6.dp),
-                                color = if (progress < 1f) MaterialTheme.colorScheme.primary else Color.Green,
-                                strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+
+                        // Checkbox overlay in select mode
+                        if (selectMode) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(6.dp)
+                                    .size(28.dp)
+                                    .background(
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.4f),
+                                        shape = CircleShape
+                                    )
+                                    .clickable {
+                                        selectedIndices = if (isSelected) selectedIndices - index else selectedIndices + index
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isSelected) {
+                                    Icon(Icons.Default.Check, contentDescription = "Selected",
+                                        tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    // Per-item Sync Progress
+                    if (currentlySyncingFile == photo || isSyncing && photo in photos.take(processedCount)) {
+                        val progress = if (currentlySyncingFile == photo) currentFileProgress else 1f
+                        LinearProgressIndicator(
+                            progress = progress,
+                            modifier = Modifier.fillMaxWidth().height(6.dp),
+                            color = if (progress < 1f) MaterialTheme.colorScheme.primary else Color.Green,
+                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = photo.name.take(20) + if (photo.name.length > 20) "..." else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = formatSize(photo.size),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.Gray
                             )
                         }
-
-                        Row(
-                            modifier = Modifier.padding(8.dp).fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = photo.name.take(20) + if (photo.name.length > 20) "..." else "", 
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = formatSize(photo.size), 
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.Gray
-                                )
-                            }
+                        if (!selectMode) {
                             IconButton(
                                 onClick = {
                                     showUploadNotification(context, 1, 1)
@@ -1555,6 +1621,11 @@ fun SyncScreen(repository: PhotoRepository) {
                 }
             }
         }
+    }
+
+    // ── Logs Dialog ───────────────────────────────────────────────
+    if (showLogsDialog) {
+        LogsDialog(onDismiss = { showLogsDialog = false })
     }
 
     // Fullscreen Image Carousel Dialog for Local Photos
@@ -2415,6 +2486,68 @@ fun MetadataRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: St
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
+        }
+    }
+}
+
+@Composable
+fun LogsDialog(onDismiss: () -> Unit) {
+    val logs = remember { com.niccher.chege_photos_app.utils.LogBuffer.getLogs() }
+    var refresh by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(refresh) {
+        while (true) {
+            delay(1000)
+            refresh++
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Upload Logs", style = MaterialTheme.typography.titleLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { com.niccher.chege_photos_app.utils.LogBuffer.clear() }) {
+                            Text("Clear")
+                        }
+                        Button(onClick = onDismiss) {
+                            Text("Close")
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val currentLogs = remember(refresh) { com.niccher.chege_photos_app.utils.LogBuffer.getLogs() }
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    itemsIndexed(currentLogs) { _, line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            modifier = Modifier.padding(vertical = 1.dp, horizontal = 4.dp)
+                        )
+                    }
+                    if (currentLogs.isEmpty()) {
+                        item {
+                            Text("No logs yet. Try uploading a photo.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.Gray,
+                                modifier = Modifier.padding(16.dp))
+                        }
+                    }
+                }
+            }
         }
     }
 }
