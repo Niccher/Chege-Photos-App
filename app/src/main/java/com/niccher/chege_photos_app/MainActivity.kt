@@ -46,6 +46,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import coil.compose.AsyncImage
+import coil.ImageLoader
+import coil.request.CachePolicy
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import com.niccher.chege_photos_app.models.Album as PhotoAlbum
@@ -204,7 +206,7 @@ fun MainScreen(
     val sessionManager = remember { SessionManager(context) }
     val sharedPrefs = remember { context.getSharedPreferences("chege_photos_prefs", android.content.Context.MODE_PRIVATE) }
     
-    var serverUrl by remember { mutableStateOf(sharedPrefs.getString("server_url", "https://photos.chegecache.co.ke/") ?: "") }
+    var serverUrl by remember { mutableStateOf(ApiClient.normalizeUrl(sharedPrefs.getString("server_url", "https://photos.chegecache.co.ke/") ?: "")) }
     var isLoggedIn by remember { mutableStateOf(sessionManager.isLoggedIn()) }
     var currentScreen by remember { mutableStateOf<Any>(Screen.Sync) }
     var showThemeDialog by remember { mutableStateOf(false) }
@@ -560,9 +562,10 @@ fun MainScreen(
                     LoginScreen(
                         serverUrl = serverUrl,
                         onUrlChange = {
-                            serverUrl = it
-                            sharedPrefs.edit().putString("server_url", it).apply()
-                            ApiClient.updateBaseUrl(it, context)
+                            val normalized = ApiClient.normalizeUrl(it)
+                            serverUrl = normalized
+                            sharedPrefs.edit().putString("server_url", normalized).apply()
+                            ApiClient.updateBaseUrl(normalized, context)
                         },
                         email = email,
                         onEmailChange = { email = it },
@@ -596,9 +599,10 @@ fun MainScreen(
                         SidebarItem.ServerConfig -> ServerConfigScreen(
                             currentUrl = serverUrl,
                             onUrlSaved = { newUrl ->
-                                serverUrl = newUrl
-                                sharedPrefs.edit().putString("server_url", newUrl).apply()
-                                ApiClient.updateBaseUrl(newUrl, context)
+                                val normalized = ApiClient.normalizeUrl(newUrl)
+                                serverUrl = normalized
+                                sharedPrefs.edit().putString("server_url", normalized).apply()
+                                ApiClient.updateBaseUrl(normalized, context)
                             },
                             onNavigateBack = { currentScreen = Screen.Sync }
                         )
@@ -622,6 +626,14 @@ fun RemotePhotoListScreen(
     onPhotosLoaded: ((Int) -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val coilImageLoader = remember(context) {
+        ImageLoader.Builder(context)
+            .okHttpClient { ApiClient.getHttpClient(context) }
+            .crossfade(false)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .build()
+    }
     var photos by remember { mutableStateOf(listOf<Photo>()) }
     var isLoading by remember { mutableStateOf(true) }
     
@@ -769,57 +781,16 @@ fun RemotePhotoListScreen(
                                 border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
                             ) {
                                 Box {
-                                    Column {
                                     AsyncImage(
-                                        model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path?.trimStart('/') ?: ""),
+                                        model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path?.trimStart('/') ?: photo.path?.trimStart('/') ?: ""),
                                         contentDescription = photo.filename,
+                                        imageLoader = coilImageLoader,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(150.dp),
+                                            .height(150.dp)
+                                            .background(Color.DarkGray),
                                         contentScale = ContentScale.Crop
                                     )
-                                    
-                                    downloadProgress[photo.path]?.let { progress ->
-                                        LinearProgressIndicator(
-                                            progress = progress,
-                                            modifier = Modifier.fillMaxWidth().height(4.dp),
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                    
-                                    Row(
-                                        modifier = Modifier.padding(8.dp).fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = photo.filename.take(20) + if (photo.filename.length > 20) "..." else "",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                maxLines = 1
-                                            )
-                                            val sizeBytes = photo.size?.toLongOrNull() ?: 0L
-                                            Text(
-                                                text = formatSize(sizeBytes),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = Color.Gray
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = { 
-                                                val id = downloadRemotePhoto(context, baseUrl, photo)
-                                                if (id != null) {
-                                                    activeDownloads[id] = photo.path
-                                                    downloadProgress[photo.path] = 0f
-                                                }
-                                            },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(Icons.Default.Download, contentDescription = "Download")
-                                        }
-                                    }
-                                    
-                                    }
                                     
                                     if (isSelected) {
                                         Surface(
@@ -958,13 +929,13 @@ fun RemotePhotoListScreen(
                     IconButton(
                         enabled = selectedPhotos.isNotEmpty(),
                         onClick = { 
-                            selectedPhotos.forEach { photo ->
-                                scope.launch {
-                                    downloadRemotePhoto(context, baseUrl, photo)?.let { id ->
-                                        activeDownloads[id] = photo.path
-                                        downloadProgress[photo.path] = 0f
-                                    }
+                            scope.launch {
+                                var successCount = 0
+                                for (photo in selectedPhotos.toList()) {
+                                    val uri = downloadRemotePhoto(context, baseUrl, photo)
+                                    if (uri != null) successCount++
                                 }
+                                Toast.makeText(context, "Downloaded $successCount photos", Toast.LENGTH_SHORT).show()
                             }
                             isSelectionMode = false
                             selectedPhotos.clear()
@@ -1050,6 +1021,7 @@ fun RemotePhotoListScreen(
                         AsyncImage(
                             model = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/'),
                             contentDescription = photo.filename,
+                            imageLoader = coilImageLoader,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer(
@@ -1083,10 +1055,10 @@ fun RemotePhotoListScreen(
                     val currentPhoto = filteredPhotos[pagerState.currentPage]
                     IconButton(
                         onClick = { 
-                            val id = downloadRemotePhoto(context, baseUrl, currentPhoto)
-                            if (id != null) {
-                                activeDownloads[id] = currentPhoto.path
-                                downloadProgress[currentPhoto.path] = 0f
+                            scope.launch {
+                                downloadRemotePhoto(context, baseUrl, currentPhoto)?.let {
+                                    Toast.makeText(context, "Downloaded to Gallery", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         }
                     ) {
@@ -1729,51 +1701,6 @@ fun SyncScreen(repository: PhotoRepository) {
                         )
                     }
 
-                    Row(
-                        modifier = Modifier.padding(8.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = photo.name.take(20) + if (photo.name.length > 20) "..." else "",
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = formatSize(photo.size),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.Gray
-                            )
-                        }
-                        if (selectedIndices.isEmpty()) {
-                            IconButton(
-                                onClick = {
-                                    showUploadNotification(context, 1, 1)
-                                    scope.launch {
-                                        currentlySyncingFile = photo
-                                        val result = repository.syncPhoto(photo) { progress ->
-                                            currentFileProgress = progress
-                                        }
-                                        if (result is PhotoSyncResult.Success) {
-                                            sessionManager.updateLastUpload()
-                                            showUploadNotification(context, 1, 1, isFinished = true)
-                                            Toast.makeText(context, "Uploaded ${photo.name}", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            showUploadNotification(context, 1, 1, isFinished = true)
-                                            val errMsg = (result as? PhotoSyncResult.Error)?.message ?: "Unknown error"
-                                            Toast.makeText(context, "Upload failed: $errMsg", Toast.LENGTH_LONG).show()
-                                        }
-                                        currentlySyncingFile = null
-                                        currentFileProgress = 0f
-                                    }
-                                },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(Icons.Default.CloudUpload, contentDescription = "Upload")
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -1937,8 +1864,9 @@ fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: 
                 }) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                 }
+                val totalCount = albumPhotosCount ?: (selectedAlbum!!.photo_count?.toIntOrNull() ?: 0) + (selectedAlbum!!.video_count?.toIntOrNull() ?: 0)
                 Text(
-                    text = "${selectedAlbum!!.name} (${albumPhotosCount ?: selectedAlbum!!.photo_count ?: "0"} photos)",
+                    text = "${selectedAlbum!!.name} ($totalCount items)",
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(start = 8.dp)
                 )
@@ -1993,7 +1921,11 @@ fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: 
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(album.name, style = MaterialTheme.typography.headlineSmall)
                                         album.description?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-                                        Text("${album.photo_count} photos", style = MaterialTheme.typography.labelSmall)
+                                        val total = (album.photo_count?.toIntOrNull() ?: 0) + (album.video_count?.toIntOrNull() ?: 0)
+                                        Text(
+                                            text = "$total all, ${album.photo_count ?: "0"} pics, ${album.video_count ?: "0"} videos",
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
                                     }
                                     IconButton(onClick = { albumToDelete = album }) {
                                         Icon(Icons.Default.Delete, contentDescription = "Delete Album", tint = MaterialTheme.colorScheme.error)
@@ -2119,29 +2051,65 @@ fun formatSize(bytes: Long): String {
     return String.format(java.util.Locale.US, "%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
 }
 
-private fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo): Long? {
-    try {
-        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-        val url = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/')
-        val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
-            .setTitle("Chege Photos: Downloading")
-            .setDescription(photo.filename)
-            .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_PICTURES, "Chege Photos/" + photo.filename)
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(true)
+private suspend fun downloadRemotePhoto(context: Context, baseUrl: String, photo: Photo): Uri? {
+    return withContext(Dispatchers.IO) {
+        try {
+            val url = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/')
+            val request = okhttp3.Request.Builder().url(url).build()
+            val response = ApiClient.getHttpClient(context).newCall(request).execute()
+            if (!response.isSuccessful) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Download failed: HTTP ${response.code}", Toast.LENGTH_SHORT).show()
+                }
+                return@withContext null
+            }
 
-        val sessionManager = com.niccher.chege_photos_app.utils.SessionManager(context)
-        sessionManager.getAuthToken()?.let { token ->
-            request.addRequestHeader("Authorization", "Bearer $token")
+            val bytes = response.body?.bytes() ?: return@withContext null
+            val mimeType = response.body?.contentType()?.toString() ?: "image/jpeg"
+
+            val filename = photo.filename.ifBlank { "chege_photo_${System.currentTimeMillis()}.jpg" }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val contentValues = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/Chege Photos")
+                    put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                if (uri == null) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Download failed: could not create file", Toast.LENGTH_SHORT).show()
+                    }
+                    return@withContext null
+                }
+                resolver.openOutputStream(uri)?.use { output ->
+                    output.write(bytes)
+                }
+                contentValues.clear()
+                contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
+                return@withContext uri
+            } else {
+                val dir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_PICTURES + "/Chege Photos"
+                )
+                dir.mkdirs()
+                val file = File(dir, filename)
+                file.writeBytes(bytes)
+                // Notify the media scanner
+                val scannedUri = Uri.fromFile(file)
+                val intent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, scannedUri)
+                context.sendBroadcast(intent)
+                return@withContext scannedUri
+            }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+            return@withContext null
         }
-
-        val id = downloadManager.enqueue(request)
-        Toast.makeText(context, "Download started...", Toast.LENGTH_SHORT).show()
-        return id
-    } catch (e: Exception) {
-        Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
-        return null
     }
 }
 

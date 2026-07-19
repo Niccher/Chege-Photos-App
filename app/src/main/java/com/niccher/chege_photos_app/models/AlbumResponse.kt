@@ -15,7 +15,8 @@ data class Album(
     val name: String,
     val description: String? = null,
     val cover_photo: String? = null,
-    val photo_count: String? = "0"
+    val photo_count: String? = "0",
+    val video_count: String? = "0"
 )
 
 @Serializable

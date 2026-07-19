@@ -126,7 +126,15 @@ object ApiClient {
 
     // ── Service management ───────────────────────────────────────────────────
 
+    private var _httpClient: OkHttpClient? = null
     private var _photoService: PhotoService? = null
+
+    fun getHttpClient(context: Context): OkHttpClient {
+        if (_httpClient == null) {
+            _httpClient = buildTrustAllClient(context)
+        }
+        return _httpClient!!
+    }
 
     fun getPhotoService(context: Context): PhotoService {
         if (_photoService == null) {
@@ -160,7 +168,7 @@ object ApiClient {
     private fun createService(url: String, context: Context): PhotoService {
         return Retrofit.Builder()
             .baseUrl(url)
-            .client(buildTrustAllClient(context))
+            .client(getHttpClient(context))
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(PhotoService::class.java)
