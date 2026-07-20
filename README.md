@@ -1,145 +1,190 @@
-<div align="center">
+# Chege Photos
 
-# 📱 Chege Photos
+A Kotlin Android app (Jetpack Compose) for Chege Photos — a self-hosted photo management platform. Syncs with the web backend and features ML-powered face recognition.
 
-**Your personal, self-hosted photo gallery and backup solution.**
+## Tech Stack
 
-[![Kotlin](https://img.shields.io/badge/Kotlin-1.9+-blue.svg?logo=kotlin)](https://kotlinlang.org)
-[![Android](https://img.shields.io/badge/Android-API_25+-green.svg?logo=android)](https://developer.android.com/)
-[![Backend](https://img.shields.io/badge/Backend-CodeIgniter_4-EF4223.svg?logo=codeigniter)](https://codeigniter.com/)
-[![Database](https://img.shields.io/badge/Database-MySQL-4479A1.svg?logo=mysql)](https://www.mysql.com/)
-[![Docker](https://img.shields.io/badge/Docker-Supported-2496ED.svg?logo=docker)](https://www.docker.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-Chege Photos is a robust, modern Android application built entirely with Kotlin. Designed with performance and clean architecture in mind, it seamlessly integrates with a containerized CodeIgniter 4 backend.
-
-[🌍 Explore the Backend Repository](#) · [🐛 Report a Bug](#) · [✨ Request a Feature](#)
-
-</div>
-
----
-
-## 📖 About the Project
-
-Chege Photos is a clean, modern gallery application that acts as a secure backup client. It organizes your local media and seamlessly syncs your favorite memories to your own private CodeIgniter 4 backend, ensuring you never lose a photo again.
-
-### 🔗 Architecture & Integration
-The mobile app relies on a decoupled architecture, consuming RESTful APIs served by a customized **CodeIgniter 4 (CI4)** backend. The backend infrastructure, including the **MySQL** database and **phpMyAdmin** interface, is fully containerized using **Docker** for easy local development, testing, and deployment.
-
-**Key Highlights:**
-* **MVVM Architecture:** Ensures separation of concerns, making the UI logic highly testable and maintainable.
-* **Coroutines & Flow:** Handles asynchronous data streams seamlessly without blocking the main thread.
-* **Robust Backend:** A lightweight, blazing-fast CI4 API providing secure data access.
-
----
-
-## ✨ Features
-
-* **Grid Layouts:** Beautiful, responsive photo grids using Material Design 3.
-* **Cloud Sync:** Push photos to your personal CI4 backend securely.
-* **Image Caching:** Fast loading and offline viewing using advanced image caching libraries.
-* **Secure Storage:** Keeps your private photos out of big-tech clouds.
-* **Dark Mode Support:** Fully responsive adaptive UI following Material Design 3 guidelines.
-
----
-
-## 🛠 Tech Stack
-
-### 📱 Android Client (Frontend)
-| Technology | Description |
+| Category | Libraries |
 |---|---|
-| **Kotlin** | Primary programming language |
-| **MVVM** | Architectural pattern |
-| **Retrofit + OkHttp** | Networking and API communication |
-| **Coroutines & Flow** | Asynchronous programming |
-| **Room / DataStore** | Local persistence and caching |
+| **Language** | Kotlin 2.0.21 |
+| **UI** | Jetpack Compose (Material 3, BOM 2024.09.00), Material Icons Extended |
+| **Networking** | Retrofit 2.11.0, OkHttp 4.12.0, OkHttp Logging Interceptor |
+| **Image Loading** | Coil 2.6.0 (Compose integration) |
+| **Async** | Kotlin Coroutines, lifecycle-runtime-ktx |
+| **Local DB** | Room 2.6.1 (with KSP) |
+| **Serialization** | Kotlinx Serialization JSON 1.7.3, Retrofit converter for kotlinx.serialization |
+| **Camera** | CameraX 1.4.1 (core, camera2, lifecycle) |
+| **Barcode** | ML Kit Barcode Scanning 17.3.0 |
+| **Biometrics** | AndroidX Biometric 1.1.0 |
+| **Build** | AGP 8.9.1, Gradle 9.6.1, KSP 2.0.21-1.0.27 |
+| **JDK** | 11 (source/target compatibility) |
 
-### ⚙️ Backend (API & Database)
-| Technology | Description |
+## Architecture
+
+Single-activity architecture (`MainActivity` extends `FragmentActivity`). All UI is built with Compose and navigation is handled via state — a `currentScreen` variable controls which composable is displayed. There is no Jetpack Navigation Component. The app connects to the Chege Photos web API via Retrofit, using an `ApiClient` singleton that manages an OkHttp client with automatic Bearer token injection, trust-all SSL (for self-hosted servers), and URL normalisation. A `PhotoRepository` layer bridges the network layer and a Room database for offline caching.
+
+### Navigation
+
+- **Bottom bar tabs**: Sync, Gallery, Albums
+- **Sidebar / drawer items**: Profile, Memories, Favorites, Archive, Trash, Explore, Faces, Theme, Server Config, About
+
+The sidebar exposes a Login screen when unauthenticated; after login the main scaffold with bottom bar and drawer is shown.
+
+## Why ML over Heuristics
+
+Face recognition is performed server-side using Insightface (Buffalo-L model) for detection and embedding generation, with Qdrant as the vector database for similarity search. The app consumes the results via REST endpoints.
+
+| Approach | Heuristic grouping | ML-based (Insightface + Qdrant) |
+|---|---|---|
+| **Pose/lighting** | Fails on non-frontal faces, varied lighting | Robust to pose, expression, occlusion, illumination |
+| **Embedding** | None (relies on EXIF, time, manual tags) | Consistent 512-dimensional embeddings |
+| **Search speed** | Linear scan, no indexing | Sub-second similarity search across the entire library |
+| **Clustering** | Requires manual tagging or folder organisation | Automatic clustering by embedding distance |
+
+The server-side pipeline detects faces, computes embeddings via Buffalo-L, indexes them in Qdrant, and returns face metadata (bounding box, person ID, confidence score, age, gender). The app uses these annotations to power the Faces screen, photo detail overlay, and face search.
+
+## How to Set Up
+
+### Prerequisites
+
+- Android Studio (latest stable)
+- JDK 11+
+- Gradle 9.6 (bundled wrapper)
+
+### Steps
+
+1. Open the project in Android Studio.
+2. Wait for Gradle sync to complete.
+3. Build and run on a device / emulator (minSdk 29).
+4. On first launch, enter your server URL in the **Server Config** screen (accessible from the sidebar). The default is `https://photos.chegecache.co.ke/`.
+5. Log in with your Chege Photos credentials.
+
+The app auto-detects private IP ranges and local hostnames, using `http://` for local servers and `https://` for public ones.
+
+## Key Features
+
+### Sync
+Scans the device's `MediaStore` for local photos and uploads them to the server with device fingerprint tracking. Upload progress is reported via a callback. Notifications are posted for file transfers.
+
+### Gallery
+Browses remote photos with a search bar and type filter (All / JPG / PNG / MP4). Supports long-press multi-select for batch operations (favorite, archive, delete, download, add to album).
+
+### Albums
+Lists remote photo albums. Supports creating, editing, and deleting albums. Photos can be added to albums via the multi-select action bar in any photo list.
+
+### Faces (Face Search)
+A persons grid displaying detected faces grouped by person. Each person card shows a face thumbnail. Tapping a person loads all photos containing that person via `GET /api/faces/by-person/{id}`.
+
+### Photo Detail
+Fullscreen carousel with pinch-to-zoom and pan. Swipe left/right to navigate photos. Tapping toggles face bounding box overlays (fetched from `GET /api/faces/{photoId}`). An info bottom sheet shows EXIF metadata and a list of detected faces with person names.
+
+## API Endpoints Used
+
+| Endpoint | Description |
 |---|---|
-| **CodeIgniter 4** | PHP Framework serving the RESTful API |
-| **MySQL** | Relational Database Management System |
-| **Docker & Compose** | Containerization and environment orchestration |
+| `POST /api/login` | Email/password login |
+| `POST /api/auth-with-token` | Token-based authentication with device fingerprint |
+| `GET /api/photos` | List remote photos |
+| `GET /api/albums` | List albums |
+| `GET /api/albums/{id}/photos` | Photos in an album |
+| `POST /api/upload` | Upload a photo (multipart) |
+| `POST /photos/delete/{id}` | Delete photo |
+| `POST /photos/restore/{id}` | Restore photo from trash |
+| `POST /photos/archive/{id}` | Archive photo |
+| `POST /photos/favorite/{id}` | Favorite photo |
+| `POST /api/albums` | Create album |
+| `PUT /api/albums/{id}` | Update album |
+| `DELETE /api/albums/{id}` | Delete album |
+| `POST /albums/add-photo` | Add photo to album |
+| `GET /api/memories` | Memories feed |
+| `GET /api/favorites` | Favorited photos |
+| `GET /api/archive` | Archived photos |
+| `GET /api/trash` | Trashed photos |
+| `GET /api/explore` | Explore / public feed |
+| `GET /api/faces/{photoId}` | Detected faces for a photo |
+| `POST /api/faces/search` | Upload a photo and search for matching faces |
+| `GET /api/faces/persons` | List all detected persons |
+| `GET /api/faces/by-person/{personId}` | All photos containing a specific person |
 
----
+## Dependencies
 
-## 📋 Prerequisites
+All key libraries (from `gradle/libs.versions.toml` and `app/build.gradle.kts`):
 
-Before you begin, ensure you have met the following requirements:
-* **Android Studio:** Giraffe (or newer)
-* **Java Development Kit (JDK):** Version 17+
-* **Docker Desktop:** Installed and running (for backend services)
-* **Git:** For version control
-
----
-
-## 🚀 Installation & Setup
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/YourOrg/Chege_Photos_App.git
-cd Chege_Photos_App
+```
+androidx.core:core-ktx:1.17.0
+androidx.lifecycle:lifecycle-runtime-ktx:2.9.4
+androidx.activity:activity-compose:1.12.3
+androidx.compose:compose-bom:2024.09.00
+androidx.compose.ui:ui
+androidx.compose.ui:ui-graphics
+androidx.compose.ui:ui-tooling-preview
+androidx.compose.material3:material3
+androidx.compose.material:material-icons-extended
+com.squareup.retrofit2:retrofit:2.11.0
+com.squareup.retrofit2:converter-kotlinx-serialization:2.11.0
+com.squareup.okhttp3:okhttp:4.12.0
+com.squareup.okhttp3:logging-interceptor:4.12.0
+org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3
+io.coil-kt:coil-compose:2.6.0
+androidx.biometric:biometric:1.1.0
+androidx.camera:camera-core:1.4.1
+androidx.camera:camera-camera2:1.4.1
+androidx.camera:camera-lifecycle:1.4.1
+androidx.camera:camera-view:1.6.1
+com.google.mlkit:barcode-scanning:17.3.0
+androidx.room:room-runtime:2.6.1
+androidx.room:room-ktx:2.6.1
 ```
 
-### 2. Set Up the CodeIgniter 4 Backend (Docker)
-The backend runs entirely in Docker containers. From the backend project directory:
-```bash
-# Build and start the containers in the background
-docker-compose up -d --build
+## Permissions
 
-# Check if containers are running properly
-docker-compose ps
+```xml
+INTERNET
+CAMERA
+READ_EXTERNAL_STORAGE (maxSdkVersion 32)
+READ_MEDIA_IMAGES
+READ_MEDIA_VIDEO
+POST_NOTIFICATIONS
 ```
-* **API Endpoint:** The backend API will be available at `http://localhost:8080/api/` (adjust port as needed).
-* **Database Management:** Access phpMyAdmin at `http://localhost:8081` using the credentials defined in your `docker-compose.yml`.
 
-### 3. Configure the Android App
-Open the Android project in Android Studio. You need to point the app to your local backend.
-1. Open `local.properties` (or `gradle.properties` depending on your setup).
-2. Add your local IP address for the API Base URL:
-```properties
-# Use 10.0.2.2 for the Android Emulator to connect to localhost
-BASE_URL="http://10.0.2.2:8080/api/"
+Biometric authentication is handled via `androidx.biometric` (no manifest permission required).
 
-# Use your machine's physical IP address if testing on a physical device
-# BASE_URL="http://192.168.1.xxx:8080/api/" 
+## Build Configuration
+
 ```
-3. Click **Sync Project with Gradle Files**.
+minSdk     = 29
+targetSdk  = 36
+compileSdk = 36
+Gradle     = 9.6.1
+AGP        = 8.9.1
+```
 
-### 4. Run the App
-* **Using the Emulator:** Select your preferred AVD in Android Studio and hit **Run** (`Shift + F10`).
-* **Using a Physical Device:** Connect your Android device via USB (ensure USB Debugging is enabled), select your device in the deployment target dropdown, and hit **Run**.
+## Package Structure
 
----
-
-## ⚙️ Configuration
-
-* **Build Variants:** The project utilizes Gradle build variants (`debug` and `release`). Ensure you select the `debug` variant for local development.
-* **Environment Variables:** Production URLs and sensitive API keys should be injected securely via CI/CD pipelines and not hardcoded into the repository.
-
----
-
-## 🤝 Contributing
-
-We welcome contributions from the community! To contribute:
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
----
-
-## 📄 License
-
-Distributed under the **MIT License**. See `LICENSE` for more information.
-
----
-
-## 💬 Support
-
-If you have any questions, encounter issues, or need further assistance with deployment, please reach out:
-
-* **Email:** [info@chegecache.co.ke](mailto:info@chegecache.co.ke)
-* **Website:** [chegecache.co.ke](https://chegecache.co.ke)
+```
+com.niccher.chege_photos_app/
+├── data/
+│   └── PhotoDatabase.kt          # Room database, DAO, migrations
+├── models/
+│   ├── AlbumResponse.kt          # Album, AlbumListResponse, SingleAlbumResponse
+│   ├── AuthResponse.kt           # AuthResponse, UserInfo
+│   ├── CachedPhoto.kt            # Room entity + converters
+│   ├── FaceData.kt               # FaceData, FaceSearchResult, PersonData, responses
+│   └── Photo.kt                  # Photo, PhotoListResponse
+├── network/
+│   ├── ApiClient.kt              # Retrofit singleton, OkHttp client, URL normalisation
+│   └── PhotoService.kt           # Retrofit interface (all API endpoints)
+├── repository/
+│   └── PhotoRepository.kt        # Network + cache logic, upload/download helpers
+├── ui/
+│   └── theme/
+│       ├── Color.kt              # Color definitions
+│       ├── Theme.kt              # ChegePhotosTheme, AppTheme enum (5 themes)
+│       └── Type.kt               # Typography
+├── utils/
+│   ├── DeviceFingerprint.kt      # Device ID generation
+│   ├── ProgressRequestBody.kt   # Upload progress tracking
+│   └── SessionManager.kt        # Auth token, user prefs, biometric state, theme pref
+├── MainActivity.kt               # Single activity, all screens, navigation
+└── QrScannerActivity.kt          # ML Kit barcode scanner activity
+```

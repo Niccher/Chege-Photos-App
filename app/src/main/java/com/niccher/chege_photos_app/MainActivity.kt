@@ -197,7 +197,7 @@ enum class SidebarItem(val title: String, val icon: androidx.compose.ui.graphics
     Theme("Theme", Icons.Default.Palette),
     ServerConfig("Server", Icons.Default.Cloud),
     About("About", Icons.Default.Info),
-    FaceSearch("Face Search", Icons.Default.Face)
+    FaceSearch("Faces", Icons.Default.Face)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -643,10 +643,6 @@ fun RemotePhotoListScreen(
     var photos by remember { mutableStateOf(listOf<Photo>()) }
     var isLoading by remember { mutableStateOf(true) }
     
-    // Search and Filter States
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedType by remember { mutableStateOf<String?>(null) } // null = All, "jpg", "png", "mp4"
-    
     // State for Fullscreen Carousel
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
     var isSelectionMode by remember { mutableStateOf(false) }
@@ -671,65 +667,9 @@ fun RemotePhotoListScreen(
         isLoading = false
     }
 
-    val filteredPhotos = remember(photos, searchQuery, selectedType) {
-        photos.filter { photo ->
-            val matchesQuery = photo.filename.contains(searchQuery, ignoreCase = true)
-            val matchesType = when (selectedType) {
-                null -> true
-                "jpg" -> photo.filename.endsWith(".jpg", ignoreCase = true) || photo.filename.endsWith(".jpeg", ignoreCase = true)
-                "png" -> photo.filename.endsWith(".png", ignoreCase = true)
-                "mp4" -> photo.filename.endsWith(".mp4", ignoreCase = true) || photo.filename.endsWith(".mov", ignoreCase = true)
-                else -> true
-            }
-            matchesQuery && matchesType
-        }
-    }
+    val filteredPhotos = photos
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (!isSelectionMode) {
-            // Search and Filter UI
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search photos...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Clear, contentDescription = "Clear")
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.medium
-                )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val types = listOf(null, "jpg", "png", "mp4")
-                    items(types) { type ->
-                        FilterChip(
-                            selected = selectedType == type,
-                            onClick = { selectedType = type },
-                            label = { Text(type?.uppercase() ?: "All") },
-                            leadingIcon = if (selectedType == type) {
-                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                            } else null
-                        )
-                    }
-                }
-            }
-        }
 
         Box(modifier = Modifier.weight(1f)) {
             if (isLoading) {
@@ -2308,7 +2248,7 @@ fun ProfileScreen(sessionManager: com.niccher.chege_photos_app.utils.SessionMana
     val userDetails = remember { sessionManager.getUserDetails() }
     
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(Icons.Default.Person, contentDescription = "Profile", modifier = Modifier.size(100.dp), tint = MaterialTheme.colorScheme.primary)
@@ -2791,8 +2731,7 @@ fun ServerConfigScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Row(
@@ -2946,7 +2885,6 @@ fun ServerConfigScreen(
 fun AboutScreen(version: String) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
@@ -2996,7 +2934,7 @@ fun AboutScreen(version: String) {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Chege Photos is a premium photo management application designed for high-performance syncing and elegant viewing. It allows you to organize your memories into beautiful albums and access them securely across your devices.",
+                        text = "Chege Photos is a premium photo management application designed for high-performance syncing and elegant viewing. It features ML-powered face recognition — detecting, embedding, clustering, and searching faces across your entire library using Insightface and Qdrant vector search.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
@@ -3019,7 +2957,9 @@ fun AboutScreen(version: String) {
                     listOf(
                         "Sync" to "Automatically backup and sync your local photos to the cloud.",
                         "Gallery" to "Browse all your photos in a high-performance grid with search and filtering.",
-                        "Albums" to "Create, rename, and manage collections of your favorite moments."
+                        "Albums" to "Create, rename, and manage collections of your favorite moments.",
+                        "Faces" to "Face recognition powered by Insightface (Buffalo-L) and Qdrant vector search. Detected faces are grouped by person, and you can tap any face to see all photos containing that person.",
+                        "Search by Face" to "Upload a photo and find all similar faces across your library using cosine similarity search on 512-dimensional embeddings."
                     ).forEach { (title, desc) ->
                         Row(modifier = Modifier.padding(vertical = 4.dp)) {
                             Icon(
@@ -3052,7 +2992,7 @@ fun AboutScreen(version: String) {
                         color = MaterialTheme.colorScheme.primary
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    listOf("Jetpack Compose", "Retrofit", "Coil", "OkHttp", "Material 3", "Coroutines", "Biometrics").forEach { lib ->
+                    listOf("Jetpack Compose", "Retrofit", "Coil", "OkHttp", "Material 3", "Coroutines", "Biometrics", "Kotlin Serialization", "Room").forEach { lib ->
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                             Box(modifier = Modifier.size(4.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
                             Spacer(modifier = Modifier.width(8.dp))
@@ -3066,7 +3006,7 @@ fun AboutScreen(version: String) {
         item {
             Spacer(modifier = Modifier.height(32.dp))
             Text(
-                text = "© 2024 Niccher. All rights reserved.",
+                text = "© 2026 Niccher. All rights reserved.",
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 style = MaterialTheme.typography.labelSmall,
@@ -3143,10 +3083,17 @@ fun FaceSearchScreen(baseUrl: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var persons by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.PersonData>>(emptyList()) }
-    var personPhotos by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.PersonPhoto>>(emptyList()) }
     var selectedPersonId by remember { mutableStateOf<Int?>(null) }
-    var selectedPersonName by remember { mutableStateOf("") }
     var loaded by remember { mutableStateOf(false) }
+
+    val coilImageLoader = remember(context) {
+        coil.ImageLoader.Builder(context)
+            .okHttpClient { com.niccher.chege_photos_app.network.ApiClient.getHttpClient(context) }
+            .crossfade(false)
+            .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+            .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+            .build()
+    }
 
     LaunchedEffect(Unit) {
         if (!loaded) {
@@ -3166,33 +3113,15 @@ fun FaceSearchScreen(baseUrl: String) {
     if (selectedPersonId != null) {
         PersonPhotosScreen(
             baseUrl = baseUrl,
-            personId = selectedPersonId!!,
-            personName = selectedPersonName,
-            onBack = {
-                selectedPersonId = null
-                personPhotos = emptyList()
-            }
+            personId = selectedPersonId!!
         )
         return
-    }
-
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            scope.launch {
-                val currentScreen = com.niccher.chege_photos_app.MainActivity::class.java
-            }
-        }
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
     ) {
-        Text("Faces", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 16.dp))
-
         if (persons.isEmpty()) {
             Text("No faces found. Run face detection on the server.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
         } else {
@@ -3207,28 +3136,36 @@ fun FaceSearchScreen(baseUrl: String) {
                         modifier = Modifier.fillMaxWidth(),
                         onClick = {
                             selectedPersonId = person.id
-                            selectedPersonName = person.name ?: "Person ${person.id}"
                         }
                     ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Icon(
-                                Icons.Default.Person,
-                                contentDescription = null,
-                                modifier = Modifier.size(48.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                            if (person.thumbnail != null) {
+                                val thumb = person.thumbnail
+                                val imgUrl = baseUrl.trimEnd('/') + "/" + (thumb.thumbnail_path ?: thumb.path).trimStart('/')
+                                AsyncImage(
+                                    model = imgUrl,
+                                    contentDescription = person.name,
+                                    imageLoader = coilImageLoader,
+                                    modifier = Modifier
+                                        .size(64.dp)
+                                        .background(Color(0xFF333333), shape = CircleShape),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(48.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                person.name ?: "Person ${person.id}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1
-                            )
-                            Text(
                                 "${person.face_count} photo${if (person.face_count != 1) "s" else ""}",
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.bodySmall,
                                 color = Color.Gray
                             )
                         }
@@ -3243,13 +3180,21 @@ fun FaceSearchScreen(baseUrl: String) {
 @Composable
 fun PersonPhotosScreen(
     baseUrl: String,
-    personId: Int,
-    personName: String,
-    onBack: () -> Unit
+    personId: Int
 ) {
     val context = LocalContext.current
     var photos by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.PersonPhoto>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
+
+    val coilImageLoader = remember(context) {
+        ImageLoader.Builder(context)
+            .okHttpClient { com.niccher.chege_photos_app.network.ApiClient.getHttpClient(context) }
+            .crossfade(false)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .build()
+    }
 
     LaunchedEffect(personId) {
         try {
@@ -3267,17 +3212,7 @@ fun PersonPhotosScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-            }
-            Text("$personName (${photos.size})", style = MaterialTheme.typography.headlineSmall)
-        }
-
-        Spacer(Modifier.height(8.dp))
-
         if (loading) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         } else if (photos.isEmpty()) {
@@ -3289,20 +3224,183 @@ fun PersonPhotosScreen(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(photos, key = { it.id }) { photo ->
+                itemsIndexed(photos, key = { _, photo -> photo.id }) { index, photo ->
                     Card(
                         modifier = Modifier.fillMaxWidth().aspectRatio(1f),
-                        onClick = { }
+                        onClick = { selectedPhotoIndex = index }
                     ) {
                         AsyncImage(
                             model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path ?: photo.path).trimStart('/'),
                             contentDescription = photo.filename,
+                            imageLoader = coilImageLoader,
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop
                         )
                     }
                 }
             }
+        }
+    }
+
+    // Full-screen photo pager
+    selectedPhotoIndex?.let { initialPage ->
+        PersonPhotoPager(
+            baseUrl = baseUrl,
+            photos = photos,
+            initialPage = initialPage,
+            personId = personId,
+            coilImageLoader = coilImageLoader,
+            onDismiss = { selectedPhotoIndex = null }
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun PersonPhotoPager(
+    baseUrl: String,
+    photos: List<com.niccher.chege_photos_app.models.PersonPhoto>,
+    initialPage: Int,
+    personId: Int,
+    coilImageLoader: ImageLoader,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { photos.size })
+            var showFaces by remember { mutableStateOf(false) }
+            var facesMap by remember { mutableStateOf<Map<Int, List<com.niccher.chege_photos_app.models.FaceData>>>(emptyMap()) }
+
+            LaunchedEffect(pagerState.currentPage) {
+                showFaces = false
+            }
+
+            LaunchedEffect(pagerState.currentPage) {
+                val photo = photos[pagerState.currentPage]
+                if (!facesMap.containsKey(photo.id)) {
+                    try {
+                        val resp = ApiClient.getPhotoService(context).getFacesByPhoto(photo.id)
+                        if (resp.isSuccessful) {
+                            val body = resp.body()
+                            if (body?.status == "success") {
+                                facesMap = facesMap + (photo.id to body.faces)
+                            }
+                        }
+                    } catch (_: Exception) { }
+                }
+            }
+
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize()
+            ) { page ->
+                val photo = photos[page]
+                var scale by remember { mutableStateOf(1f) }
+                var offset by remember { mutableStateOf(Offset.Zero) }
+
+                LaunchedEffect(pagerState.currentPage) {
+                    scale = 1f
+                    offset = Offset.Zero
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, _ ->
+                                scale = (scale * zoom).coerceIn(1f, 5f)
+                                if (scale > 1f) {
+                                    offset += pan
+                                } else {
+                                    offset = Offset.Zero
+                                }
+                            }
+                        }
+                ) {
+                    AsyncImage(
+                        model = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/'),
+                        contentDescription = photo.filename,
+                        imageLoader = coilImageLoader,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(
+                                scaleX = scale,
+                                scaleY = scale,
+                                translationX = offset.x,
+                                translationY = offset.y
+                            ),
+                        contentScale = ContentScale.Fit
+                    )
+
+                    // Face bounding boxes overlay
+                    if (showFaces) {
+                        val faces = facesMap[photo.id]
+                        if (!faces.isNullOrEmpty()) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val cw = this.size.width
+                                val ch = this.size.height
+                                val pw = photo.width?.toFloat() ?: cw
+                                val ph = photo.height?.toFloat() ?: ch
+                                for (face in faces) {
+                                    val left = ((face.bbox.x / pw) * cw).toFloat()
+                                    val top = ((face.bbox.y / ph) * ch).toFloat()
+                                    val right = (((face.bbox.x + face.bbox.w) / pw) * cw).toFloat()
+                                    val bottom = (((face.bbox.y + face.bbox.h) / ph) * ch).toFloat()
+                                    val isHighlight = face.person_id == personId
+                                    drawRect(
+                                        color = if (isHighlight) Color(0xFFFFC107).copy(alpha = 0.7f) else Color(0xFF00FF00).copy(alpha = 0.5f),
+                                        topLeft = Offset(left, top),
+                                        size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+                                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = if (isHighlight) 5f else 3f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Close button
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(16.dp)
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+            }
+
+            // Face toggle button
+            IconButton(
+                onClick = { showFaces = !showFaces },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+            ) {
+                Icon(
+                    if (showFaces) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                    contentDescription = "Toggle Faces",
+                    tint = if (showFaces) Color(0xFFFFC107) else Color.White
+                )
+            }
+
+            // Photo counter
+            Text(
+                "${pagerState.currentPage + 1} / ${photos.size}",
+                color = Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp)
+            )
         }
     }
 }

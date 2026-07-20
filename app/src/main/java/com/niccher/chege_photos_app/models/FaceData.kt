@@ -55,7 +55,20 @@ data class PersonData(
     val name: String? = null,
     val cluster_label: Int? = null,
     val face_count: Int = 0,
-    val thumbnail_face_id: Int? = null
+    val thumbnail_face_id: Int? = null,
+    val thumbnail: PersonThumbnail? = null
+)
+
+@Serializable
+data class PersonThumbnail(
+    val path: String = "",
+    val thumbnail_path: String? = null,
+    val bbox_x: Double = 0.0,
+    val bbox_y: Double = 0.0,
+    val bbox_w: Double = 0.0,
+    val bbox_h: Double = 0.0,
+    val photo_width: Double = 800.0,
+    val photo_height: Double = 600.0
 )
 
 @Serializable
@@ -69,7 +82,9 @@ data class PersonPhoto(
     val id: Int = 0,
     val path: String = "",
     val thumbnail_path: String? = null,
-    val filename: String = ""
+    val filename: String = "",
+    val width: Int? = null,
+    val height: Int? = null
 )
 
 @Serializable
