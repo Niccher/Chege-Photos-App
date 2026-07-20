@@ -100,4 +100,26 @@ interface PhotoService {
         @Field("album_id") albumId: String,
         @Field("photo_id") photoId: String
     ): Response<AuthResponse>
+
+    // ── Face endpoints ─────────────────────────────────────────────
+
+    @GET("api/faces/{photoId}")
+    suspend fun getFacesByPhoto(
+        @Path("photoId") photoId: Int
+    ): Response<com.niccher.chege_photos_app.models.FacesListResponse>
+
+    @Multipart
+    @POST("api/faces/search")
+    suspend fun searchFacesByPhoto(
+        @Part file: okhttp3.MultipartBody.Part,
+        @Part limit: okhttp3.MultipartBody.Part
+    ): Response<com.niccher.chege_photos_app.models.FaceSearchResponse>
+
+    @GET("api/faces/persons")
+    suspend fun getPersons(): Response<com.niccher.chege_photos_app.models.PersonsListResponse>
+
+    @GET("api/faces/by-person/{personId}")
+    suspend fun getPersonPhotos(
+        @Path("personId") personId: Int
+    ): Response<com.niccher.chege_photos_app.models.PersonPhotosResponse>
 }

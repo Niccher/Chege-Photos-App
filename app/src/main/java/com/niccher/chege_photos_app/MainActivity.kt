@@ -64,6 +64,8 @@ import com.niccher.chege_photos_app.ui.theme.ChegePhotosTheme
 import com.niccher.chege_photos_app.ui.theme.AppTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import retrofit2.Response
@@ -76,6 +78,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -86,6 +89,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.Canvas
 
 class MainActivity : FragmentActivity() {
     private lateinit var photoRepository: PhotoRepository
@@ -192,7 +196,8 @@ enum class SidebarItem(val title: String, val icon: androidx.compose.ui.graphics
     Explore("Explore", Icons.Default.Explore),
     Theme("Theme", Icons.Default.Palette),
     ServerConfig("Server", Icons.Default.Cloud),
-    About("About", Icons.Default.Info)
+    About("About", Icons.Default.Info),
+    FaceSearch("Face Search", Icons.Default.Face)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -429,7 +434,7 @@ fun MainScreen(
 
                     // Tools Section
                     Text("Tools", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                    listOf(SidebarItem.Archive, SidebarItem.Trash, SidebarItem.Theme).forEach { item ->
+                    listOf(SidebarItem.Archive, SidebarItem.Trash, SidebarItem.FaceSearch, SidebarItem.Theme).forEach { item ->
                         NavigationDrawerItem(
                             label = { Text(item.title) },
                             selected = currentScreen == item,
@@ -596,6 +601,7 @@ fun MainScreen(
                         SidebarItem.Trash -> RemotePhotoListScreen(repository, serverUrl, "Trash", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getTrash() })
                         SidebarItem.Explore -> RemotePhotoListScreen(repository, serverUrl, "Explore", activeDownloads, downloadProgress, fetchPhotos = { ApiClient.getPhotoService(it).getExplore() })
                         SidebarItem.About -> AboutScreen(appVersion)
+                        SidebarItem.FaceSearch -> FaceSearchScreen(baseUrl = serverUrl)
                         SidebarItem.ServerConfig -> ServerConfigScreen(
                             currentUrl = serverUrl,
                             onUrlSaved = { newUrl ->
@@ -982,10 +988,30 @@ fun RemotePhotoListScreen(
             ) {
                 val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { filteredPhotos.size })
                 var showInfoSheet by remember { mutableStateOf(false) }
+                var showFaces by remember { mutableStateOf(false) }
+                var facesMap by remember { mutableStateOf<Map<Int, List<com.niccher.chege_photos_app.models.FaceData>>>(emptyMap()) }
 
                 // Reset states when the user swipes to a different page
                 LaunchedEffect(pagerState.currentPage) {
                     showInfoSheet = false
+                    showFaces = false
+                }
+
+                // Fetch faces when page changes
+                LaunchedEffect(pagerState.currentPage) {
+                    val photo = filteredPhotos[pagerState.currentPage]
+                    val pid = photo.id?.toIntOrNull() ?: return@LaunchedEffect
+                    if (!facesMap.containsKey(pid)) {
+                        try {
+                            val resp = ApiClient.getPhotoService(context).getFacesByPhoto(pid)
+                            if (resp.isSuccessful) {
+                                val body = resp.body()
+                                if (body?.status == "success") {
+                                    facesMap = facesMap + (pid to body.faces)
+                                }
+                            }
+                        } catch (_: Exception) { }
+                    }
                 }
 
                 HorizontalPager(
@@ -1032,6 +1058,32 @@ fun RemotePhotoListScreen(
                                 ),
                             contentScale = ContentScale.Fit
                         )
+
+                        // Face bounding boxes overlay
+                        val pid = photo.id?.toIntOrNull()
+                        if (showFaces && pid != null) {
+                            val faces = facesMap[pid]
+                            if (!faces.isNullOrEmpty()) {
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    val cw = this.size.width
+                                    val ch = this.size.height
+                                    val pw = photo.width?.toFloatOrNull() ?: cw
+                                    val ph = photo.height?.toFloatOrNull() ?: ch
+                                    for (face in faces) {
+                                        val left = ((face.bbox.x / pw) * cw).toFloat()
+                                        val top = ((face.bbox.y / ph) * ch).toFloat()
+                                        val right = (((face.bbox.x + face.bbox.w) / pw) * cw).toFloat()
+                                        val bottom = (((face.bbox.y + face.bbox.h) / ph) * ch).toFloat()
+                                        drawRect(
+                                            color = androidx.compose.ui.graphics.Color(0xFF00FF00).copy(alpha = 0.5f),
+                                            topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                                            size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         
                         downloadProgress[photo.path]?.let { progress ->
                             LinearProgressIndicator(
@@ -1064,6 +1116,9 @@ fun RemotePhotoListScreen(
                     ) {
                         Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White)
                     }
+                    IconButton(onClick = { showFaces = !showFaces }) {
+                        Icon(Icons.Default.Face, contentDescription = "Toggle Faces", tint = if (showFaces) Color.Green else Color.White)
+                    }
                     IconButton(onClick = { showInfoSheet = true }) {
                         Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
                     }
@@ -1092,6 +1147,7 @@ fun RemotePhotoListScreen(
                 if (showInfoSheet) {
                     PhotoDetailsBottomSheet(
                         photo = currentPhoto,
+                        baseUrl = baseUrl,
                         onDismiss = { showInfoSheet = false }
                     )
                 }
@@ -2458,10 +2514,29 @@ data class ExifInfo(
 fun PhotoDetailsBottomSheet(
     photo: Photo,
     localFile: java.io.File? = null,
+    baseUrl: String = "",
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState()
     val context = LocalContext.current
+    var faceList by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.FaceData>>(emptyList()) }
+    var facesLoaded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(photo.id, baseUrl) {
+        val pid = photo.id?.toIntOrNull()
+        if (pid != null && baseUrl.isNotEmpty() && !facesLoaded) {
+            try {
+                val resp = ApiClient.getPhotoService(context).getFacesByPhoto(pid)
+                if (resp.isSuccessful) {
+                    val body = resp.body()
+                    if (body?.status == "success") {
+                        faceList = body.faces
+                    }
+                }
+            } catch (_: Exception) { }
+            facesLoaded = true
+        }
+    }
     
     val exifData = remember(photo, localFile) {
         if (localFile != null && localFile.exists()) {
@@ -2588,6 +2663,60 @@ fun PhotoDetailsBottomSheet(
                         Icon(Icons.Default.Map, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("View on Google Maps")
+                    }
+                }
+            }
+
+            // Faces Section
+            if (faceList.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(24.dp))
+                MetadataSection(title = "Faces (${faceList.size})") {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(faceList, key = { it.face_id }) { face ->
+                            Card(
+                                modifier = Modifier.width(100.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(80.dp)
+                                            .background(Color(0xFF333333)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        AsyncImage(
+                                            model = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/'),
+                                            contentDescription = "Face",
+                                            modifier = Modifier
+                                                .size(80.dp)
+                                                .background(Color(0xFF333333)),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
+                                    Text(
+                                        face.person_name ?: "Unassigned",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                    Text(
+                                        "Score: ${"%.2f".format(face.detection_score)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.Gray
+                                    )
+                                    if (face.age != null) {
+                                        Text(
+                                            "~${face.age}y ${face.gender?.take(1) ?: ""}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3002,6 +3131,176 @@ fun AlbumPickerDialog(
                 Spacer(modifier = Modifier.height(12.dp))
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
                     Text("Cancel")
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FaceSearchScreen(baseUrl: String) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var persons by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.PersonData>>(emptyList()) }
+    var personPhotos by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.PersonPhoto>>(emptyList()) }
+    var selectedPersonId by remember { mutableStateOf<Int?>(null) }
+    var selectedPersonName by remember { mutableStateOf("") }
+    var loaded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (!loaded) {
+            try {
+                val resp = ApiClient.getPhotoService(context).getPersons()
+                if (resp.isSuccessful) {
+                    val body = resp.body()
+                    if (body?.status == "success") {
+                        persons = body.persons
+                    }
+                }
+            } catch (_: Exception) { }
+            loaded = true
+        }
+    }
+
+    if (selectedPersonId != null) {
+        PersonPhotosScreen(
+            baseUrl = baseUrl,
+            personId = selectedPersonId!!,
+            personName = selectedPersonName,
+            onBack = {
+                selectedPersonId = null
+                personPhotos = emptyList()
+            }
+        )
+        return
+    }
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                val currentScreen = com.niccher.chege_photos_app.MainActivity::class.java
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text("Faces", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 16.dp))
+
+        if (persons.isEmpty()) {
+            Text("No faces found. Run face detection on the server.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(persons, key = { it.id }) { person ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            selectedPersonId = person.id
+                            selectedPersonName = person.name ?: "Person ${person.id}"
+                        }
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                person.name ?: "Person ${person.id}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1
+                            )
+                            Text(
+                                "${person.face_count} photo${if (person.face_count != 1) "s" else ""}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PersonPhotosScreen(
+    baseUrl: String,
+    personId: Int,
+    personName: String,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    var photos by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.PersonPhoto>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(personId) {
+        try {
+            val resp = ApiClient.getPhotoService(context).getPersonPhotos(personId)
+            if (resp.isSuccessful) {
+                val body = resp.body()
+                if (body?.status == "success") {
+                    photos = body.photos
+                }
+            }
+        } catch (_: Exception) { }
+        loading = false
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+            }
+            Text("$personName (${photos.size})", style = MaterialTheme.typography.headlineSmall)
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        if (loading) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        } else if (photos.isEmpty()) {
+            Text("No photos found.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(photos, key = { it.id }) { photo ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                        onClick = { }
+                    ) {
+                        AsyncImage(
+                            model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path ?: photo.path).trimStart('/'),
+                            contentDescription = photo.filename,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
                 }
             }
         }
