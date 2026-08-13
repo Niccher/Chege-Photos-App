@@ -97,7 +97,7 @@ class PhotoRepository(private val context: Context) {
         }
     }
 
-    suspend fun syncPhoto(photo: LocalPhoto, onProgress: ((Float) -> Unit)? = null): PhotoSyncResult {
+    suspend fun syncPhoto(photo: LocalPhoto, albumId: String? = null, onProgress: ((Float) -> Unit)? = null): PhotoSyncResult {
         val tag = "UPLOAD"
         Log.v(tag, "=== START upload: ${photo.name} (${photo.size} bytes) ===")
         Log.v(tag, "File exists: ${photo.file?.exists()}, URI: ${photo.uri}")
@@ -145,11 +145,15 @@ class PhotoRepository(private val context: Context) {
 
             val deviceId = DeviceFingerprint.getDeviceId(context)
             val deviceIdPart = MultipartBody.Part.createFormData("device_id", deviceId)
-            Log.v(tag, "Device ID: $deviceId")
+            val fingerprint = DeviceFingerprint.getFingerprint()
+            val fingerprintPart = MultipartBody.Part.createFormData("device_fingerprint", fingerprint)
+            Log.v(tag, "Device ID: $deviceId, Fingerprint: $fingerprint")
+
+            val albumPart = albumId?.let { MultipartBody.Part.createFormData("album_id", it) }
 
             val service = ApiClient.getPhotoService(context)
             Log.d(tag, "Sending POST api/upload for ${photo.name}...")
-            val response = service.uploadPhoto(body, deviceIdPart)
+            val response = service.uploadPhoto(body, deviceIdPart, fingerprintPart, albumPart)
             Log.d(tag, "Response HTTP ${response.code()}: ${response.message()}")
 
             val bodyStr = response.body()?.let { 

@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
 @Entity(tableName = "cached_photos")
 @Serializable
 data class CachedPhoto(
-    @PrimaryKey val id: Int,
+    @PrimaryKey val id: String,
     val filename: String,
     val path: String,
     val thumbnail_path: String?,
@@ -25,7 +25,7 @@ data class CachedPhoto(
     val updated_at: String? = null
 ) {
     fun toPhoto() = Photo(
-        id = id.toString(),
+        id = id,
         filename = filename,
         path = path,
         thumbnail_path = thumbnail_path,
@@ -45,7 +45,7 @@ data class CachedPhoto(
 }
 
 fun Photo.toCachedPhoto() = CachedPhoto(
-    id = id?.toIntOrNull() ?: 0,
+    id = id ?: "",
     filename = filename,
     path = path,
     thumbnail_path = thumbnail_path,

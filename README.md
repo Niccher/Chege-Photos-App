@@ -1,190 +1,325 @@
+<div align="center">
+
 # Chege Photos
 
-A Kotlin Android app (Jetpack Compose) for Chege Photos — a self-hosted photo management platform. Syncs with the web backend and features ML-powered face recognition.
+Android companion app for the Chege Photos self-hosted photo management platform.
 
-## Tech Stack
+![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?style=for-the-badge&logo=kotlin)
+![Compose](https://img.shields.io/badge/Compose-BOM_2024.09.00-4285F4?style=for-the-badge&logo=jetpackcompose)
+![minSdk](https://img.shields.io/badge/minSdk-29-34A853?style=for-the-badge&logo=android)
+![targetSdk](https://img.shields.io/badge/targetSdk-36-34A853?style=for-the-badge&logo=android)
+![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
-| Category | Libraries |
-|---|---|
-| **Language** | Kotlin 2.0.21 |
-| **UI** | Jetpack Compose (Material 3, BOM 2024.09.00), Material Icons Extended |
-| **Networking** | Retrofit 2.11.0, OkHttp 4.12.0, OkHttp Logging Interceptor |
-| **Image Loading** | Coil 2.6.0 (Compose integration) |
-| **Async** | Kotlin Coroutines, lifecycle-runtime-ktx |
-| **Local DB** | Room 2.6.1 (with KSP) |
-| **Serialization** | Kotlinx Serialization JSON 1.7.3, Retrofit converter for kotlinx.serialization |
-| **Camera** | CameraX 1.4.1 (core, camera2, lifecycle) |
-| **Barcode** | ML Kit Barcode Scanning 17.3.0 |
-| **Biometrics** | AndroidX Biometric 1.1.0 |
-| **Build** | AGP 8.9.1, Gradle 9.6.1, KSP 2.0.21-1.0.27 |
-| **JDK** | 11 (source/target compatibility) |
+</div>
+
+---
+
+## About the Project
+
+Chege Photos is a Kotlin Android app built with Jetpack Compose that syncs with the [Chege Photos WebApp](https://github.com/niccher/Chege-Photos-WebApp) backend. It provides photo upload/sync, browsing, album management, media organisation (archive, trash, favorites), a shared/public explore feed, and ML-powered face recognition via the [ML Chege Photos](https://github.com/niccher/Chege-Photos-ML) service. All UI is built in a single-activity Compose architecture with state-based navigation — no Jetpack Navigation Component.
+
+---
 
 ## Architecture
 
-Single-activity architecture (`MainActivity` extends `FragmentActivity`). All UI is built with Compose and navigation is handled via state — a `currentScreen` variable controls which composable is displayed. There is no Jetpack Navigation Component. The app connects to the Chege Photos web API via Retrofit, using an `ApiClient` singleton that manages an OkHttp client with automatic Bearer token injection, trust-all SSL (for self-hosted servers), and URL normalisation. A `PhotoRepository` layer bridges the network layer and a Room database for offline caching.
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        Android App                            │
+│                                                              │
+│  ┌──────────────┐   Retrofit    ┌────────────────────────┐   │
+│  │  Single Activity            │  Chege Photos Web App   │   │
+│  │  (MainActivity)             │  (PHP/CI4, port 9005)   │   │
+│  │                    │         │                          │   │
+│  │  ├─ Compose UI    │─────────▶  ├─ REST API             │   │
+│  │  ├─ PhotoRepository │        │  ├─ Auth (tokens)       │   │
+│  │  ├─ Room Cache     │        │  └─ Face proxy          │   │
+│  │  └─ SessionManager │         └───────────┬──────────────┘   │
+│  └─────────────────────┘                     │                   │
+│            │                                 │                   │
+│            │  HTTPS                           │ cURL             │
+│            ▼                                 ▼                   │
+│  ┌──────────────────┐            ┌────────────────────────┐   │
+│  │  ML Chege Photos  │            │  MySQL 8.4              │   │
+│  │  (FastAPI)        │            │  (db_chege_photos)      │   │
+│  │  port 9051        │            │  port 3306              │   │
+│  └──────────────────┘            └────────────────────────┘   │
+│                                                              │
+│  ┌──────────────────┐                                        │
+│  │  Qdrant           │  Vector DB for face embeddings        │
+│  │  (ANN search)    │                                        │
+│  └──────────────────┘                                        │
+└──────────────────────────────────────────────────────────────┘
+```
 
-### Navigation
+The app communicates with the web backend via Retrofit 2 (with kotlinx.serialization). Authentication is handled via Shield auth tokens (8-character codes displayed as QR codes in the web UI). Face data is fetched directly from the web app's face API endpoints, which in turn proxy to the ML service. A Room database caches gallery photo metadata for offline access (other feeds are fetched live).
 
-- **Bottom bar tabs**: Sync, Gallery, Albums
-- **Sidebar / drawer items**: Profile, Memories, Favorites, Archive, Trash, Explore, Faces, Theme, Server Config, About
+---
 
-The sidebar exposes a Login screen when unauthenticated; after login the main scaffold with bottom bar and drawer is shown.
+## Features
 
-## Why ML over Heuristics
+### Sync & Upload
+- **MediaStore scan** — Scans device's `MediaStore.Images.Media` for local photos
+- **Batch upload** — Uploads local photos to server with per-file progress callbacks and device fingerprint tracking
+- **Notification** — Upload progress posted as Android notification
+- **Auto-retry** — Failed uploads can be retried from the sync screen
 
-Face recognition is performed server-side using Insightface (Buffalo-L model) for detection and embedding generation, with Qdrant as the vector database for similarity search. The app consumes the results via REST endpoints.
-
-| Approach | Heuristic grouping | ML-based (Insightface + Qdrant) |
-|---|---|---|
-| **Pose/lighting** | Fails on non-frontal faces, varied lighting | Robust to pose, expression, occlusion, illumination |
-| **Embedding** | None (relies on EXIF, time, manual tags) | Consistent 512-dimensional embeddings |
-| **Search speed** | Linear scan, no indexing | Sub-second similarity search across the entire library |
-| **Clustering** | Requires manual tagging or folder organisation | Automatic clustering by embedding distance |
-
-The server-side pipeline detects faces, computes embeddings via Buffalo-L, indexes them in Qdrant, and returns face metadata (bounding box, person ID, confidence score, age, gender). The app uses these annotations to power the Faces screen, photo detail overlay, and face search.
-
-## How to Set Up
-
-### Prerequisites
-
-- Android Studio (latest stable)
-- JDK 11+
-- Gradle 9.6 (bundled wrapper)
-
-### Steps
-
-1. Open the project in Android Studio.
-2. Wait for Gradle sync to complete.
-3. Build and run on a device / emulator (minSdk 29).
-4. On first launch, enter your server URL in the **Server Config** screen (accessible from the sidebar). The default is `https://photos.chegecache.co.ke/`.
-5. Log in with your Chege Photos credentials.
-
-The app auto-detects private IP ranges and local hostnames, using `http://` for local servers and `https://` for public ones.
-
-## Key Features
-
-### Sync
-Scans the device's `MediaStore` for local photos and uploads them to the server with device fingerprint tracking. Upload progress is reported via a callback. Notifications are posted for file transfers.
-
-### Gallery
-Browses remote photos with a search bar and type filter (All / JPG / PNG / MP4). Supports long-press multi-select for batch operations (favorite, archive, delete, download, add to album).
+### Gallery & Browsing
+- **Remote photo grid** — Paginated grid with infinite scroll from `GET /api/photos`
+- **Multi-select** — Long-press to enter selection mode; batch favorite, archive, delete, download, add-to-album
+- **Fullscreen viewer** — Carousel with pinch-to-zoom and pan; swipe left/right between photos
+- **Search & filter** — Search bar and type filter chips (All / JPG / PNG / MP4) in gallery view
 
 ### Albums
-Lists remote photo albums. Supports creating, editing, and deleting albums. Photos can be added to albums via the multi-select action bar in any photo list.
+- **List** — All remote albums with photo count and cover image
+- **CRUD** — Create, rename, delete albums
+- **Add photos** — From multi-select action bar in any photo list
 
-### Faces (Face Search)
-A persons grid displaying detected faces grouped by person. Each person card shows a face thumbnail. Tapping a person loads all photos containing that person via `GET /api/faces/by-person/{id}`.
+### Faces (requires ML service)
+- **Person grid** — All detected persons with face thumbnails; tap to view photos containing that person
+- **Person photo viewer** — Grid of photos for a selected person; tap to open fullscreen pager
+- **Person photo pager** — Horizontal swipe through all person photos with:
+  - Pinch-to-zoom and pan gestures
+  - Face bounding box overlay toggle (gold = current person, green = other persons)
+  - Photo counter and close button
+- **Photo detail overlay** — Tapping the photo info button shows a bottom sheet with face list, person names, and EXIF metadata
+- **Face search** — Upload a photo to find matching faces across the library
 
-### Photo Detail
-Fullscreen carousel with pinch-to-zoom and pan. Swipe left/right to navigate photos. Tapping toggles face bounding box overlays (fetched from `GET /api/faces/{photoId}`). An info bottom sheet shows EXIF metadata and a list of detected faces with person names.
+### Memories, Explore, Archive, Trash, Favorites
+- **Memories** — On-this-day and 6-months-ago feed (two feeds served by the backend)
+- **Explore** — Public / shared photo feed
+- **Archive** — Archived photos (tap to view, with option to unarchive)
+- **Trash** — Soft-deleted photos (with restore option)
+- **Favorites** — Filtered view of favorited photos
 
-## API Endpoints Used
+### Sharing
+- **Share intents** — Supports `ACTION_SEND` and `ACTION_SEND_MULTIPLE` for images and videos from other apps
+- **Upload dialog** — Incoming share intents show a dialog to select target album before uploading
 
-| Endpoint | Description |
+### Authentication & Security
+- **Email/password login** — Standard credential login via `POST /api/login`. A default superuser profile is seeded automatically for administrative overrides (`superadmin@eavesdroid.com` / `SuperAdmin@2024!`).
+- **Token login** — 8-character auth token (from web settings) + device fingerprint via `POST /api/auth-with-token`
+- **QR scan** — Scan the QR code from the web app's token page using CameraX + ML Kit barcode scanner
+- **Biometric unlock** — Optional biometric gate on app launch using AndroidX Biometric
+- **Device fingerprinting** — SHA-256 of ~20 Build fields for device identification
+
+### Themes
+- **5 themes** — Default (dynamic color on Android 12+), Solarized, Grey, Midnight, Black
+- **Persistence** — Theme selection stored in SharedPreferences, applied on next launch
+
+---
+
+## Tech Stack
+
+| Category | Libraries (exact versions) |
 |---|---|
-| `POST /api/login` | Email/password login |
-| `POST /api/auth-with-token` | Token-based authentication with device fingerprint |
-| `GET /api/photos` | List remote photos |
-| `GET /api/albums` | List albums |
-| `GET /api/albums/{id}/photos` | Photos in an album |
-| `POST /api/upload` | Upload a photo (multipart) |
-| `POST /photos/delete/{id}` | Delete photo |
-| `POST /photos/restore/{id}` | Restore photo from trash |
-| `POST /photos/archive/{id}` | Archive photo |
-| `POST /photos/favorite/{id}` | Favorite photo |
-| `POST /api/albums` | Create album |
-| `PUT /api/albums/{id}` | Update album |
-| `DELETE /api/albums/{id}` | Delete album |
-| `POST /albums/add-photo` | Add photo to album |
-| `GET /api/memories` | Memories feed |
-| `GET /api/favorites` | Favorited photos |
-| `GET /api/archive` | Archived photos |
-| `GET /api/trash` | Trashed photos |
-| `GET /api/explore` | Explore / public feed |
-| `GET /api/faces/{photoId}` | Detected faces for a photo |
-| `POST /api/faces/search` | Upload a photo and search for matching faces |
-| `GET /api/faces/persons` | List all detected persons |
-| `GET /api/faces/by-person/{personId}` | All photos containing a specific person |
+| **Language** | Kotlin 2.0.21 |
+| **UI** | Jetpack Compose (BOM 2024.09.00), Material 3, Material Icons Extended |
+| **Networking** | Retrofit 2.11.0, OkHttp 4.12.0, OkHttp Logging Interceptor |
+| **Image loading** | Coil 2.6.0 (Compose integration) |
+| **Serialization** | Kotlinx Serialization JSON 1.7.3 |
+| **Local DB** | Room 2.6.1 (with KSP 2.0.21-1.0.27) |
+| **Camera** | CameraX 1.4.1 (core, camera2, lifecycle, view 1.6.1) |
+| **Barcode** | ML Kit Barcode Scanning 17.3.0 |
+| **Biometrics** | AndroidX Biometric 1.1.0 |
+| **Build** | AGP 8.9.1, Gradle 9.6.1 |
 
-## Dependencies
+## Prerequisites
 
-All key libraries (from `gradle/libs.versions.toml` and `app/build.gradle.kts`):
+- Android Studio Ladybug or later
+- JDK 11+
+- Gradle 9.6.1 (bundled wrapper)
+- Android device / emulator running Android 10+ (minSdk 29)
+
+## Installation & Setup
+
+```bash
+# Open the project in Android Studio
+# Wait for Gradle sync to complete
+# Build and run on device / emulator
+```
+
+### Connecting to a Backend
+
+1. **Default URL:** `https://photos.chegecache.co.ke/` (points to the public staging demo host).
+2. **Custom URL:** Change the server URL in the **Server Config** screen (sidebar → Server Config). The app includes URL normalisation that auto-detects private IP ranges (`10.x`, `172.16-31.x`, `192.168.x`, `localhost`, `*.local`) and uses `http://` for local servers, `https://` for public ones.
+3. **Using an emulator:** Use `http://10.0.2.2:9005/` to reach the host machine's self-hosted Docker web app.
+4. **Using a physical device:** Use `http://<host-ip>:9005/` (ensure both device and host are on the same network to connect to your self-hosted Docker container).
+
+### Generating an Auth Token
+
+1. Log in to the web app at your server URL
+2. Go to **Settings → Tokens**
+3. Click **Generate New Token** — an 8-character token is created
+4. Either scan the QR code with the Android app's QR scanner, or manually enter the token
+
+---
+
+## Usage / API Endpoints
+
+### Authentication
+
+| Method | Retrofit function | Endpoint | Purpose |
+|---|---|---|---|
+| `POST` | `login()` | `api/login` | Email/password login |
+| `POST` | `authWithToken()` | `api/auth-with-token` | Token + device fingerprint auth |
+
+### Photo browsing
+
+| Method | Retrofit function | Endpoint | Purpose |
+|---|---|---|---|
+| `GET` | `getRemotePhotos()` | `api/photos` | List all remote photos |
+| `GET` | `getMemories()` | `api/memories` | Memories feed |
+| `GET` | `getFavorites()` | `api/favorites` | Favorited photos |
+| `GET` | `getArchived()` | `api/archive` | Archived photos |
+| `GET` | `getTrash()` | `api/trash` | Trashed photos |
+| `GET` | `getExplore()` | `api/explore` | Explore feed |
+
+### Albums
+
+| Method | Retrofit function | Endpoint | Purpose |
+|---|---|---|---|
+| `GET` | `getAlbums()` | `api/albums` | List albums |
+| `GET` | `getAlbumPhotos(id)` | `api/albums/{id}/photos` | Photos in album |
+| `POST` | `createAlbum()` | `api/albums` | Create album |
+| `PUT` | `updateAlbum()` | `api/albums/{id}` | Update album |
+| `DELETE` | `deleteAlbum()` | `api/albums/{id}` | Delete album |
+| `POST` | `addPhotoToAlbum()` | `albums/add-photo` | Add photo to album |
+
+### Photo actions
+
+| Method | Retrofit function | Endpoint | Purpose |
+|---|---|---|---|
+| `POST` | `uploadPhoto()` | `api/upload` | Upload photo (multipart) |
+| `POST` | `deletePhoto()` | `photos/delete/{id}` | Soft-delete photo |
+| `POST` | `restorePhoto()` | `photos/restore/{id}` | Restore from trash |
+| `POST` | `archivePhoto()` | `photos/archive/{id}` | Archive photo |
+| `POST` | `favoritePhoto()` | `photos/favorite/{id}` | Toggle favorite |
+
+### Face recognition
+
+| Method | Retrofit function | Endpoint | Purpose |
+|---|---|---|---|
+| `GET` | `getFacesByPhoto(photoId)` | `api/faces/{photoId}` | Faces for a photo |
+| `POST` | `searchFacesByPhoto()` | `api/faces/search` | Upload photo + search faces |
+| `GET` | `getPersons()` | `api/faces/persons` | List all persons |
+| `GET` | `getPersonPhotos(personId)` | `api/faces/by-person/{personId}` | Photos containing a person |
+
+---
+
+## Project Structure
 
 ```
-androidx.core:core-ktx:1.17.0
-androidx.lifecycle:lifecycle-runtime-ktx:2.9.4
-androidx.activity:activity-compose:1.12.3
-androidx.compose:compose-bom:2024.09.00
-androidx.compose.ui:ui
-androidx.compose.ui:ui-graphics
-androidx.compose.ui:ui-tooling-preview
-androidx.compose.material3:material3
-androidx.compose.material:material-icons-extended
-com.squareup.retrofit2:retrofit:2.11.0
-com.squareup.retrofit2:converter-kotlinx-serialization:2.11.0
-com.squareup.okhttp3:okhttp:4.12.0
-com.squareup.okhttp3:logging-interceptor:4.12.0
-org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3
-io.coil-kt:coil-compose:2.6.0
-androidx.biometric:biometric:1.1.0
-androidx.camera:camera-core:1.4.1
-androidx.camera:camera-camera2:1.4.1
-androidx.camera:camera-lifecycle:1.4.1
-androidx.camera:camera-view:1.6.1
-com.google.mlkit:barcode-scanning:17.3.0
-androidx.room:room-runtime:2.6.1
-androidx.room:room-ktx:2.6.1
+Chege_Photos_App/
+├── app/
+│   ├── build.gradle.kts             # App module: SDK versions, dependencies
+│   └── src/main/
+│       ├── AndroidManifest.xml       # Permissions, activities, intent filters
+│       ├── java/com/niccher/chege_photos_app/
+│       │   ├── MainActivity.kt       # Single activity, all composable screens (3400+ lines)
+│       │   ├── QrScannerActivity.kt   # CameraX + ML Kit barcode scanner
+│       │   ├── data/
+│       │   │   └── PhotoDatabase.kt  # Room database, DAO, migrations
+│       │   ├── models/
+│       │   │   ├── Photo.kt          # Photo, PhotoListResponse
+│       │   │   ├── AlbumResponse.kt  # Album, AlbumListResponse, SingleAlbumResponse
+│       │   │   ├── AuthResponse.kt   # AuthResponse, UserInfo
+│       │   │   ├── FaceData.kt       # FaceData, PersonData, PersonPhoto, search models
+│       │   │   └── CachedPhoto.kt    # Room entity ↔ Photo converter
+│       │   ├── network/
+│       │   │   ├── ApiClient.kt      # Retrofit singleton, OkHttp, URL normalisation
+│       │   │   └── PhotoService.kt   # Retrofit interface (all 24 endpoints)
+│       │   ├── repository/
+│       │   │   └── PhotoRepository.kt # Network + Room cache, upload/download logic
+│       │   ├── ui/theme/
+│       │   │   ├── Color.kt          # Color definitions (light, solarized, grey, midnight, black)
+│       │   │   ├── Theme.kt          # ChegePhotosTheme, 5 AppTheme variants
+│       │   │   └── Type.kt           # Typography
+│       │   └── utils/
+│       │       ├── SessionManager.kt # SharedPreferences: auth, theme, biometric, user prefs
+│       │       ├── DeviceFingerprint.kt # SHA-256 build-field fingerprint
+│       │       └── ProgressRequestBody.kt # OkHttp upload progress wrapper
+│       └── res/                      # Drawables, layouts, strings, themes, XML config
+├── gradle/
+│   ├── libs.versions.toml            # Version catalog (all dependency versions)
+│   └── wrapper/
+│       └── gradle-wrapper.properties # Gradle 9.6.1
+├── build.gradle.kts                  # Project-level: AGP, Kotlin, KSP plugins
+├── settings.gradle.kts               # Module includes, repository config
+├── gradle.properties                 # JVM args, AndroidX
+├── local.properties                  # SDK path (machine-local)
+├── CONTRIBUTING.md
+└── LICENSE                           # MIT
 ```
+
+---
+
+## Screens
+
+| Screen | Composable | Description |
+|---|---|---|
+| Login | `LoginScreen` | Email/password + token login with QR scanner |
+| Sync | `SyncScreen` | Local photo scan, batch upload with progress |
+| Gallery | `GalleryScreen` → `RemotePhotoListScreen` | Remote photo grid with multi-select |
+| Albums | `AlbumsScreen` | Album list + CRUD |
+| Album detail | *(inline in AlbumsScreen)* | Photos in an album |
+| Faces | `FaceSearchScreen` | Person grid with thumbnails |
+| Person photos | `PersonPhotosScreen` | Photos of a person + fullscreen pager |
+| Memories | `RemotePhotoListScreen` | On-this-day and 6-month feeds |
+| Favorites | `RemotePhotoListScreen` | Favorited photos |
+| Archive | `RemotePhotoListScreen` | Archived photos |
+| Trash | `RemotePhotoListScreen` | Soft-deleted photos |
+| Explore | `RemotePhotoListScreen` | Shared/public feed |
+| Profile | `ProfileScreen` | User details, biometric toggle |
+| Server Config | `ServerConfigScreen` | Backend URL, connection test |
+| About | `AboutScreen` | App version, how-it-works, libraries |
+| QR Scanner | `QrScannerActivity` | CameraX + ML Kit barcode scanner |
+| Photo detail | *(fullscreen dialog)* | Carousel, zoom/pan, face overlays, info sheet |
+
+---
 
 ## Permissions
 
 ```xml
 INTERNET
 CAMERA
-READ_EXTERNAL_STORAGE (maxSdkVersion 32)
+READ_EXTERNAL_STORAGE          (maxSdkVersion 32)
 READ_MEDIA_IMAGES
 READ_MEDIA_VIDEO
 POST_NOTIFICATIONS
 ```
 
-Biometric authentication is handled via `androidx.biometric` (no manifest permission required).
+Biometric authentication requires no manifest permission.
 
-## Build Configuration
+---
 
-```
-minSdk     = 29
-targetSdk  = 36
-compileSdk = 36
-Gradle     = 9.6.1
-AGP        = 8.9.1
-```
+## Configuration
 
-## Package Structure
+The default backend URL is hardcoded in `ApiClient.kt` as `https://photos.chegecache.co.ke/`. Users can override it at runtime via the Server Config screen; the custom URL is persisted to SharedPreferences under the key `server_url`.
 
-```
-com.niccher.chege_photos_app/
-├── data/
-│   └── PhotoDatabase.kt          # Room database, DAO, migrations
-├── models/
-│   ├── AlbumResponse.kt          # Album, AlbumListResponse, SingleAlbumResponse
-│   ├── AuthResponse.kt           # AuthResponse, UserInfo
-│   ├── CachedPhoto.kt            # Room entity + converters
-│   ├── FaceData.kt               # FaceData, FaceSearchResult, PersonData, responses
-│   └── Photo.kt                  # Photo, PhotoListResponse
-├── network/
-│   ├── ApiClient.kt              # Retrofit singleton, OkHttp client, URL normalisation
-│   └── PhotoService.kt           # Retrofit interface (all API endpoints)
-├── repository/
-│   └── PhotoRepository.kt        # Network + cache logic, upload/download helpers
-├── ui/
-│   └── theme/
-│       ├── Color.kt              # Color definitions
-│       ├── Theme.kt              # ChegePhotosTheme, AppTheme enum (5 themes)
-│       └── Type.kt               # Typography
-├── utils/
-│   ├── DeviceFingerprint.kt      # Device ID generation
-│   ├── ProgressRequestBody.kt   # Upload progress tracking
-│   └── SessionManager.kt        # Auth token, user prefs, biometric state, theme pref
-├── MainActivity.kt               # Single activity, all screens, navigation
-└── QrScannerActivity.kt          # ML Kit barcode scanner activity
-```
+| Setting | Key | Default |
+|---|---|---|
+| Server URL | `server_url` | `https://photos.chegecache.co.ke/` |
+| Theme | — | `DEFAULT` |
+| Biometric enabled | `biometric_enabled` | `false` |
+
+---
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/your-feature`)
+3. Commit your changes (`git commit -m 'Add feature'`)
+4. Push to the branch (`git push origin feature/your-feature`)
+5. Open a Pull Request
+
+---
+
+## License
+
+MIT License. See `LICENSE` file in this repository.
+
+---
+
+## Support / Contact
+
+For issues and feature requests, please open an issue on the [GitHub repository](https://github.com/niccher/Chege-Photos-Android/issues).

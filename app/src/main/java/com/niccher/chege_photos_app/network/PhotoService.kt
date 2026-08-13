@@ -59,7 +59,9 @@ interface PhotoService {
     @POST("api/upload")
     suspend fun uploadPhoto(
         @Part file: MultipartBody.Part,
-        @Part deviceId: MultipartBody.Part
+        @Part deviceId: MultipartBody.Part,
+        @Part deviceFingerprint: MultipartBody.Part? = null,
+        @Part albumId: MultipartBody.Part? = null
     ): Response<AuthResponse>
 
     @POST("photos/delete/{id}")

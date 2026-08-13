@@ -89,7 +89,11 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.Canvas
+
+private const val REMOTE_PAGE_SIZE = 40
 
 class MainActivity : FragmentActivity() {
     private lateinit var photoRepository: PhotoRepository
@@ -651,6 +655,12 @@ fun RemotePhotoListScreen(
     var albumPickerAlbums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
     val scope = rememberCoroutineScope()
 
+    // Search / type filter / client-side pagination
+    var searchQuery by remember { mutableStateOf("") }
+    var typeFilter by remember { mutableStateOf("All") }
+    var visibleCount by remember { mutableStateOf(REMOTE_PAGE_SIZE) }
+    val gridState = rememberLazyGridState()
+
     LaunchedEffect(title) {
         isLoading = true
         photos = if (fetchPhotos != null) {
@@ -667,9 +677,78 @@ fun RemotePhotoListScreen(
         isLoading = false
     }
 
-    val filteredPhotos = photos
+    val filteredPhotos = remember(photos, searchQuery, typeFilter) {
+        val query = searchQuery.trim()
+        photos.filter { photo ->
+            val matchesQuery = query.isEmpty() ||
+                photo.filename.contains(query, ignoreCase = true) ||
+                photo.path.contains(query, ignoreCase = true)
+            val matchesType = when (typeFilter) {
+                "JPG" -> photo.mime_type?.contains("jpeg", ignoreCase = true) == true ||
+                    photo.filename.endsWith(".jpg", ignoreCase = true) ||
+                    photo.filename.endsWith(".jpeg", ignoreCase = true)
+                "PNG" -> photo.mime_type?.contains("png", ignoreCase = true) == true ||
+                    photo.filename.endsWith(".png", ignoreCase = true)
+                "MP4" -> photo.mime_type?.contains("mp4", ignoreCase = true) == true ||
+                    photo.filename.endsWith(".mp4", ignoreCase = true)
+                else -> true
+            }
+            matchesQuery && matchesType
+        }
+    }
+
+    // Reset pagination when the query or type filter changes
+    LaunchedEffect(searchQuery, typeFilter) {
+        visibleCount = REMOTE_PAGE_SIZE
+        gridState.scrollToItem(0)
+    }
+
+    // Auto-load the next page when the user scrolls near the end of the current page
+    LaunchedEffect(gridState, visibleCount, filteredPhotos.size) {
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+            .collect { lastVisibleIndex ->
+                if (lastVisibleIndex >= visibleCount - 1 && visibleCount < filteredPhotos.size) {
+                    visibleCount = minOf(visibleCount + REMOTE_PAGE_SIZE, filteredPhotos.size)
+                }
+            }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
+
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search photos") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear search")
+                    }
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            singleLine = true
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf("All", "JPG", "PNG", "MP4").forEach { t ->
+                FilterChip(
+                    selected = typeFilter == t,
+                    onClick = { typeFilter = t },
+                    label = { Text(t) }
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
 
         Box(modifier = Modifier.weight(1f)) {
             if (isLoading) {
@@ -697,9 +776,10 @@ fun RemotePhotoListScreen(
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(4.dp)
+                        contentPadding = PaddingValues(4.dp),
+                        state = gridState
                     ) {
-                        itemsIndexed(filteredPhotos) { index, photo ->
+                        itemsIndexed(filteredPhotos.take(visibleCount)) { index, photo ->
                             val isSelected = selectedPhotos.contains(photo)
                             Card(
                                 modifier = Modifier
@@ -754,11 +834,23 @@ fun RemotePhotoListScreen(
                                     }
                             }
                         }
+                        }
+                        if (visibleCount < filteredPhotos.size) {
+                            item(key = "load_more_footer") {
+                                Button(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(8.dp),
+                                    onClick = { visibleCount = minOf(visibleCount + REMOTE_PAGE_SIZE, filteredPhotos.size) }
+                                ) {
+                                    Text("Load more (${filteredPhotos.size - visibleCount} more)")
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-    }
 
         if (isSelectionMode) {
             Surface(
@@ -1554,11 +1646,44 @@ fun SyncScreen(repository: PhotoRepository) {
     var currentlySyncingFile by remember { mutableStateOf<com.niccher.chege_photos_app.repository.LocalPhoto?>(null) }
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
     var selectedIndices by remember { mutableStateOf(setOf<Int>()) }
+    var failedItems by remember { mutableStateOf(listOf<Pair<com.niccher.chege_photos_app.repository.LocalPhoto, String>>()) }
 
     val targetPhotos = if (selectedIndices.isNotEmpty()) {
         selectedIndices.sorted().map { photos[it] }
     } else {
         photos
+    }
+
+    val uploadBatch: (List<com.niccher.chege_photos_app.repository.LocalPhoto>, String) -> Unit = { batch, label ->
+        scope.launch {
+            isSyncing = true
+            processedCount = 0
+            currentFileProgress = 0f
+            val batchSize = batch.size
+            showUploadNotification(context, 0, batchSize)
+            val newFailed = mutableListOf<Pair<com.niccher.chege_photos_app.repository.LocalPhoto, String>>()
+            for ((index, photo) in batch.withIndex()) {
+                currentlySyncingFile = photo
+                showUploadNotification(context, index + 1, batchSize)
+                val result = repository.syncPhoto(photo) { progress ->
+                    currentFileProgress = progress
+                }
+                if (result is PhotoSyncResult.Success) {
+                    processedCount++
+                    sessionManager.updateLastUpload()
+                } else {
+                    val errMsg = (result as? PhotoSyncResult.Error)?.message ?: "Unknown error"
+                    newFailed.add(photo to errMsg)
+                }
+                currentFileProgress = 0f
+                currentlySyncingFile = null
+            }
+            isSyncing = false
+            failedItems = newFailed
+            showUploadNotification(context, processedCount, batchSize, isFinished = true)
+            Toast.makeText(context, "Synced $processedCount out of $batchSize $label photos", Toast.LENGTH_SHORT).show()
+            selectedIndices = emptySet()
+        }
     }
 
     Column {
@@ -1571,31 +1696,7 @@ fun SyncScreen(repository: PhotoRepository) {
                 modifier = Modifier.weight(1f),
                 enabled = !isSyncing && photos.isNotEmpty(),
                 onClick = {
-                    isSyncing = true
-                    processedCount = 0
-                    currentFileProgress = 0f
-                    val batch = targetPhotos
-                    scope.launch {
-                        showUploadNotification(context, 0, batch.size)
-                        for ((index, photo) in batch.withIndex()) {
-                            currentlySyncingFile = photo
-                            showUploadNotification(context, index + 1, batch.size)
-                            val result = repository.syncPhoto(photo) { progress ->
-                                currentFileProgress = progress
-                            }
-                            if (result is PhotoSyncResult.Success) {
-                                processedCount++
-                                sessionManager.updateLastUpload()
-                            }
-                            currentFileProgress = 0f
-                            currentlySyncingFile = null
-                        }
-                        isSyncing = false
-                        showUploadNotification(context, processedCount, batch.size, isFinished = true)
-                        val label = if (selectedIndices.isNotEmpty()) "selected" else "local"
-                        Toast.makeText(context, "Synced $processedCount out of ${batch.size} $label photos", Toast.LENGTH_SHORT).show()
-                        selectedIndices = emptySet()
-                    }
+                    uploadBatch(targetPhotos, if (selectedIndices.isNotEmpty()) "selected" else "local")
                 }
             ) {
                 val label = if (selectedIndices.isNotEmpty()) "Upload Selected (${selectedIndices.size})"
@@ -1609,6 +1710,24 @@ fun SyncScreen(repository: PhotoRepository) {
                     Text("Cancel (${selectedIndices.size})")
                 }
             }
+
+            if (failedItems.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = { uploadBatch(failedItems.map { it.first }, "failed") },
+                    enabled = !isSyncing
+                ) {
+                    Text("Retry (${failedItems.size})")
+                }
+            }
+        }
+
+        if (failedItems.isNotEmpty() && !isSyncing) {
+            Text(
+                text = "${failedItems.size} upload(s) failed. First error: ${failedItems.first().second.take(80)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+            )
         }
 
         // ── Progress ──────────────────────────────────────────────
@@ -2145,7 +2264,19 @@ fun SharedUploadDialog(
     var isUploading by remember { mutableStateOf(false) }
     var uploadedCount by remember { mutableStateOf(0) }
     var currentFileProgress by remember { mutableStateOf(0f) }
+    var selectedAlbum by remember { mutableStateOf<PhotoAlbum?>(null) }
+    var albums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
+    var showAlbumMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        try {
+            val resp = ApiClient.getPhotoService(context).getAlbums()
+            if (resp.isSuccessful) {
+                albums = resp.body()?.albums ?: emptyList()
+            }
+        } catch (_: Exception) { }
+    }
     
     val localPhotos = remember(files.size) {
         files.map { file ->
@@ -2168,6 +2299,45 @@ fun SharedUploadDialog(
                     Text("Upload Shared Items", style = MaterialTheme.typography.headlineMedium)
                     Spacer(modifier = Modifier.height(16.dp))
                     
+                    Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isUploading,
+                            onClick = { showAlbumMenu = true }
+                        ) {
+                            Icon(Icons.Default.PhotoAlbum, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                selectedAlbum?.name
+                                    ?: if (albums.isEmpty()) "No albums available" else "Choose album (optional)",
+                                maxLines = 1
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                        }
+                        DropdownMenu(
+                            expanded = showAlbumMenu,
+                            onDismissRequest = { showAlbumMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("No album") },
+                                onClick = {
+                                    selectedAlbum = null
+                                    showAlbumMenu = false
+                                }
+                            )
+                            albums.forEach { album ->
+                                DropdownMenuItem(
+                                    text = { Text(album.name ?: "Untitled") },
+                                    onClick = {
+                                        selectedAlbum = album
+                                        showAlbumMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    
                     Button(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         enabled = !isUploading,
@@ -2178,7 +2348,7 @@ fun SharedUploadDialog(
                             scope.launch {
                                 for ((index, localPhoto) in localPhotos.withIndex()) {
                                     showUploadNotification(context, index + 1, files.size)
-                                    val result = repository.syncPhoto(localPhoto) { progress ->
+                                    val result = repository.syncPhoto(localPhoto, albumId = selectedAlbum?.id) { progress ->
                                         currentFileProgress = progress
                                     }
                                     if (result is PhotoSyncResult.Success) {
@@ -3085,6 +3255,9 @@ fun FaceSearchScreen(baseUrl: String) {
     var persons by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.PersonData>>(emptyList()) }
     var selectedPersonId by remember { mutableStateOf<Int?>(null) }
     var loaded by remember { mutableStateOf(false) }
+    var isSearching by remember { mutableStateOf(false) }
+    var searchResults by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.FaceSearchResult>>(emptyList()) }
+    var searchError by remember { mutableStateOf<String?>(null) }
 
     val coilImageLoader = remember(context) {
         coil.ImageLoader.Builder(context)
@@ -3093,6 +3266,50 @@ fun FaceSearchScreen(baseUrl: String) {
             .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
             .diskCachePolicy(coil.request.CachePolicy.ENABLED)
             .build()
+    }
+
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                isSearching = true
+                searchResults = emptyList()
+                searchError = null
+                try {
+                    val bytes = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    }
+                    if (bytes == null) {
+                        searchError = "Failed to read the selected image"
+                    } else {
+                        val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+                        val filePart = okhttp3.MultipartBody.Part.createFormData(
+                            "file",
+                            "face_search_${System.currentTimeMillis()}.jpg",
+                            bytes.toRequestBody(mime.toMediaTypeOrNull())
+                        )
+                        val limitPart = okhttp3.MultipartBody.Part.createFormData("limit", "10")
+                        val resp = withContext(Dispatchers.IO) {
+                            ApiClient.getPhotoService(context).searchFacesByPhoto(filePart, limitPart)
+                        }
+                        if (resp.isSuccessful) {
+                            val body = resp.body()
+                            if (body?.status == "success") {
+                                searchResults = body.data?.results ?: emptyList()
+                            } else {
+                                searchError = body?.status ?: "Face search failed"
+                            }
+                        } else {
+                            searchError = "Server error: HTTP ${resp.code()}"
+                        }
+                    }
+                } catch (e: Exception) {
+                    searchError = e.localizedMessage ?: "Face search failed"
+                }
+                isSearching = false
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -3122,12 +3339,86 @@ fun FaceSearchScreen(baseUrl: String) {
         modifier = Modifier
             .fillMaxSize()
     ) {
+        Button(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            enabled = !isSearching,
+            onClick = { imagePicker.launch("image/*") }
+        ) {
+            Icon(Icons.Default.Search, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(if (isSearching) "Searching..." else "Search by face")
+        }
+
+        if (isSearching) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+        }
+
+        if (searchError != null) {
+            Text(
+                text = searchError!!,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+
+        if (searchResults.isNotEmpty()) {
+            Text(
+                text = "${searchResults.size} similar face(s)",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+            LazyColumn(modifier = Modifier.heightIn(max = 260.dp)) {
+                items(searchResults, key = { it.face_id }) { result ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column {
+                                Text(result.person_name ?: "Unknown person", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "Match: ${"%.1f".format(result.score * 100)}%  •  photo #${result.photo_id}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
         if (persons.isEmpty()) {
-            Text("No faces found. Run face detection on the server.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("No faces found. Run face detection on the server.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+            }
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
