@@ -61,6 +61,7 @@ The app communicates with the web backend via Retrofit 2 (with kotlinx.serializa
 - **MediaStore scan** — Scans device's `MediaStore.Images.Media` for local photos
 - **Batch upload** — Uploads local photos to server with per-file progress callbacks and device fingerprint tracking
 - **Background Sync** — Utilises `OfflineSyncWorker` and `SyncWorker` via Android WorkManager for automated and queued sync operations
+- **Manual background upload** — Allows manual selection and queuing of photos for upload in the background (`ManualUploadWorker`) with progress updates and notifications.
 - **Offline Actions** — Queue photo actions (archive, favorite, delete) locally when offline, automatically synced on connection restore
 - **Notification** — Upload progress posted as Android notification
 - **Auto-retry** — Failed uploads can be retried from the sync screen
@@ -248,6 +249,7 @@ Chege_Photos_App/
 │       │       ├── MemoriesWidgetProvider.kt # Home screen memories/favorites widget
 │       │       ├── OfflineSyncWorker.kt # Worker to sync offline actions
 │       │       ├── SyncWorker.kt     # Worker to sync local MediaStore photos
+│       │       ├── ManualUploadWorker.kt # Worker to upload manually selected photos
 │       │       └── PortraitCaptureActivity.kt # CameraX portrait photo capture
 │       └── res/                      # Drawables, layouts, strings, themes, XML config
 ├── gradle/

@@ -43,6 +43,7 @@ import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -135,7 +136,7 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    private fun scheduleBackgroundSync() {
+    fun scheduleBackgroundSync() {
         val sessionManager = SessionManager(this)
         val workManager = androidx.work.WorkManager.getInstance(applicationContext)
 
@@ -706,16 +707,35 @@ fun RemotePhotoListScreen(
     onPhotosLoaded: ((Int) -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val coilImageLoader = remember(context) {
-        ImageLoader.Builder(context)
-            .okHttpClient { ApiClient.getHttpClient(context) }
-            .crossfade(false)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            .build()
-    }
-    var photos by remember { mutableStateOf(listOf<Photo>()) }
+    val coilImageLoader = remember(context) { ApiClient.getImageLoader(context) }
+    val dbPhotos by remember(repository) { repository.getPhotosFlow() }.collectAsState(initial = emptyList())
+    var remotePhotos by remember { mutableStateOf(listOf<Photo>()) }
+    val photos = if (fetchPhotos == null) dbPhotos else remotePhotos
+
     var isLoading by remember { mutableStateOf(true) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    val refreshData = {
+        scope.launch {
+            isRefreshing = true
+            if (fetchPhotos != null) {
+                remotePhotos = try {
+                    val response = fetchPhotos(context)
+                    if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
+                } catch (e: Exception) {
+                    emptyList()
+                }
+            } else {
+                try {
+                    repository.getRemotePhotos()
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed to refresh remote photos: ${e.message}")
+                }
+            }
+            isRefreshing = false
+        }
+    }
     
     // State for Fullscreen Carousel
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
@@ -723,7 +743,6 @@ fun RemotePhotoListScreen(
     val selectedPhotos = remember { mutableStateListOf<Photo>() }
     var showAlbumPicker by remember { mutableStateOf(false) }
     var albumPickerAlbums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
-    val scope = rememberCoroutineScope()
 
     // Search / type filter / client-side pagination
     var searchQuery by remember { mutableStateOf("") }
@@ -733,18 +752,25 @@ fun RemotePhotoListScreen(
 
     LaunchedEffect(title) {
         isLoading = true
-        photos = if (fetchPhotos != null) {
-            try {
+        if (fetchPhotos != null) {
+            remotePhotos = try {
                 val response = fetchPhotos(context)
                 if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
             } catch (e: Exception) {
                 emptyList()
             }
         } else {
-            repository.getRemotePhotos()
+            try {
+                repository.getRemotePhotos()
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to refresh remote photos: ${e.message}")
+            }
         }
-        onPhotosLoaded?.invoke(photos.size)
         isLoading = false
+    }
+
+    LaunchedEffect(photos.size) {
+        onPhotosLoaded?.invoke(photos.size)
     }
 
     val filteredPhotos = remember(photos, searchQuery, typeFilter) {
@@ -820,7 +846,11 @@ fun RemotePhotoListScreen(
         }
         Spacer(modifier = Modifier.height(4.dp))
 
-        Box(modifier = Modifier.weight(1f)) {
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = { refreshData() },
+            modifier = Modifier.weight(1f)
+        ) {
             if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
@@ -849,7 +879,10 @@ fun RemotePhotoListScreen(
                         contentPadding = PaddingValues(4.dp),
                         state = gridState
                     ) {
-                        itemsIndexed(filteredPhotos.take(visibleCount)) { index, photo ->
+                        itemsIndexed(
+                            items = filteredPhotos.take(visibleCount),
+                            key = { _, photo -> photo.id ?: photo.path }
+                        ) { index, photo ->
                             val isSelected = selectedPhotos.contains(photo)
                             Card(
                                 modifier = Modifier
@@ -962,11 +995,13 @@ fun RemotePhotoListScreen(
                                     repository.favoritePhoto(photo.id ?: "")
                                 }
                                 isLoading = true
-                                photos = if (fetchPhotos != null) {
+                                if (fetchPhotos != null) {
                                     try {
                                         val response = fetchPhotos(context)
-                                        if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
-                                    } catch (e: Exception) { emptyList() }
+                                        if (response.isSuccessful) {
+                                            remotePhotos = response.body()?.photos ?: emptyList()
+                                        }
+                                    } catch (e: Exception) { }
                                 } else {
                                     repository.getRemotePhotos()
                                 }
@@ -987,11 +1022,13 @@ fun RemotePhotoListScreen(
                                     repository.archivePhoto(photo.id ?: "")
                                 }
                                 isLoading = true
-                                photos = if (fetchPhotos != null) {
+                                if (fetchPhotos != null) {
                                     try {
                                         val response = fetchPhotos(context)
-                                        if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
-                                    } catch (e: Exception) { emptyList() }
+                                        if (response.isSuccessful) {
+                                            remotePhotos = response.body()?.photos ?: emptyList()
+                                        }
+                                    } catch (e: Exception) { }
                                 } else {
                                     repository.getRemotePhotos()
                                 }
@@ -1030,11 +1067,13 @@ fun RemotePhotoListScreen(
                                     repository.deletePhoto(photo.id ?: "")
                                 }
                                 isLoading = true
-                                photos = if (fetchPhotos != null) {
+                                if (fetchPhotos != null) {
                                     try {
                                         val response = fetchPhotos(context)
-                                        if (response.isSuccessful) response.body()?.photos ?: emptyList() else emptyList()
-                                    } catch (e: Exception) { emptyList() }
+                                        if (response.isSuccessful) {
+                                            remotePhotos = response.body()?.photos ?: emptyList()
+                                        }
+                                    } catch (e: Exception) { }
                                 } else {
                                     repository.getRemotePhotos()
                                 }
@@ -1772,7 +1811,7 @@ private fun ErrorBanner(errorMessage: String?) {
 
 
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SyncScreen(repository: PhotoRepository) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -1787,13 +1826,38 @@ fun SyncScreen(repository: PhotoRepository) {
         }
     }
 
-    var isSyncing by remember { mutableStateOf(false) }
-    var currentFileProgress by remember { mutableStateOf(0f) }
-    var processedCount by remember { mutableStateOf(0) }
-    var currentlySyncingFile by remember { mutableStateOf<com.niccher.chege_photos_app.repository.LocalPhoto?>(null) }
+    // WorkManager Integration
+    val workManager = remember { androidx.work.WorkManager.getInstance(context.applicationContext) }
+    val workInfosState = remember {
+        workManager.getWorkInfosForUniqueWorkFlow("ChegePhotosManualUpload")
+    }.collectAsState(initial = emptyList())
+
+    val workInfo = workInfosState.value.firstOrNull()
+    val isSyncing = workInfo != null && workInfo.state == androidx.work.WorkInfo.State.RUNNING
+
+    val progressData = workInfo?.progress
+    val currentFileProgress = progressData?.getFloat("progress", 0f) ?: 0f
+    val processedCount = progressData?.getInt("current", 0) ?: 0
+    val currentlySyncingName = progressData?.getString("current_name")
+
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
     var selectedIndices by remember { mutableStateOf(setOf<Int>()) }
     var failedItems by remember { mutableStateOf(listOf<Pair<com.niccher.chege_photos_app.repository.LocalPhoto, String>>()) }
+    var isRefreshing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(workInfo?.state) {
+        if (workInfo != null) {
+            if (workInfo.state == androidx.work.WorkInfo.State.SUCCEEDED) {
+                val output = workInfo.outputData
+                val succeeded = output.getInt("succeeded", 0)
+                val total = output.getInt("total", 0)
+                Toast.makeText(context, "Synced $succeeded out of $total photos", Toast.LENGTH_SHORT).show()
+                selectedIndices = emptySet()
+            } else if (workInfo.state == androidx.work.WorkInfo.State.FAILED) {
+                Toast.makeText(context, "Upload failed or cancelled", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     var selectedFolder by remember { mutableStateOf("All") }
 
@@ -1812,38 +1876,41 @@ fun SyncScreen(repository: PhotoRepository) {
     }
 
     val uploadBatch: (List<com.niccher.chege_photos_app.repository.LocalPhoto>, String) -> Unit = { batch, label ->
-        scope.launch {
-            isSyncing = true
-            processedCount = 0
-            currentFileProgress = 0f
-            val batchSize = batch.size
-            showUploadNotification(context, 0, batchSize)
-            val newFailed = mutableListOf<Pair<com.niccher.chege_photos_app.repository.LocalPhoto, String>>()
-            for ((index, photo) in batch.withIndex()) {
-                currentlySyncingFile = photo
-                showUploadNotification(context, index + 1, batchSize)
-                val result = repository.syncPhoto(photo) { progress ->
-                    currentFileProgress = progress
-                }
-                if (result is PhotoSyncResult.Success) {
-                    processedCount++
-                    sessionManager.updateLastUpload()
-                } else {
-                    val errMsg = (result as? PhotoSyncResult.Error)?.message ?: "Unknown error"
-                    newFailed.add(photo to errMsg)
-                }
-                currentFileProgress = 0f
-                currentlySyncingFile = null
-            }
-            isSyncing = false
-            failedItems = newFailed
-            showUploadNotification(context, processedCount, batchSize, isFinished = true)
-            Toast.makeText(context, "Synced $processedCount out of $batchSize $label photos", Toast.LENGTH_SHORT).show()
-            selectedIndices = emptySet()
-        }
+        val uris = batch.map { it.uri.toString() }.toTypedArray()
+        val filePaths = batch.map { it.file?.absolutePath ?: "" }.toTypedArray()
+        val names = batch.map { it.name }.toTypedArray()
+        val sizes = batch.map { it.size }.toLongArray()
+
+        val inputData = androidx.work.workDataOf(
+            "uris" to uris,
+            "file_paths" to filePaths,
+            "names" to names,
+            "sizes" to sizes
+        )
+
+        val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.niccher.chege_photos_app.utils.ManualUploadWorker>()
+            .setInputData(inputData)
+            .build()
+
+        workManager.enqueueUniqueWork(
+            "ChegePhotosManualUpload",
+            androidx.work.ExistingWorkPolicy.REPLACE,
+            workRequest
+        )
     }
 
-    Column {
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = {
+            scope.launch {
+                isRefreshing = true
+                photos = repository.getLocalPhotos()
+                isRefreshing = false
+            }
+        },
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Column {
         // ── Top action bar ─────────────────────────────────────────
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
@@ -1908,20 +1975,35 @@ fun SyncScreen(repository: PhotoRepository) {
         }
 
         // ── Progress ──────────────────────────────────────────────
+        // ── Progress ──────────────────────────────────────────────
         if (isSyncing) {
-            val overallProgress = if (targetPhotos.isNotEmpty()) (processedCount.toFloat() + currentFileProgress) / targetPhotos.size else 0f
             Column(modifier = Modifier.padding(vertical = 8.dp)) {
                 LinearProgressIndicator(
-                    progress = { overallProgress },
+                    progress = { currentFileProgress },
                     modifier = Modifier.fillMaxWidth().height(8.dp),
                     color = MaterialTheme.colorScheme.primary,
                     strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
                 )
-                Text(
-                    text = "Overall Progress: ${(overallProgress * 100).toInt()}%",
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Syncing: ${currentlySyncingName ?: ""} (${(currentFileProgress * 100).toInt()}%)",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "Cancel",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable {
+                            workManager.cancelUniqueWork("ChegePhotosManualUpload")
+                        }.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
             }
         }
 
@@ -1931,7 +2013,10 @@ fun SyncScreen(repository: PhotoRepository) {
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(4.dp)
         ) {
-            itemsIndexed(filteredPhotos) { index, photo ->
+            itemsIndexed(
+                items = filteredPhotos,
+                key = { _, photo -> photo.uri.toString() }
+            ) { index, photo ->
                 val isSelected = index in selectedIndices
                 Card(
                     modifier = Modifier
@@ -2013,6 +2098,7 @@ fun SyncScreen(repository: PhotoRepository) {
                 }
             }
         }
+    }
     }
 
     // Fullscreen Image Carousel Dialog for Local Photos
@@ -2154,7 +2240,7 @@ fun GalleryScreen(repository: PhotoRepository, baseUrl: String, activeDownloads:
 }
 
 @Composable
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: MutableMap<Long, String>, downloadProgress: MutableMap<String, Float>) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var albums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
@@ -2166,9 +2252,10 @@ fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: 
     var albumToEdit by remember { mutableStateOf<PhotoAlbum?>(null) }
     var albumToDelete by remember { mutableStateOf<PhotoAlbum?>(null) }
     val scope = rememberCoroutineScope()
+    var isRefreshing by remember { mutableStateOf(false) }
 
-    val fetchAlbums: () -> Unit = {
-        isLoading = true
+    fun fetchAlbums(showLoadingState: Boolean = true) {
+        if (showLoadingState) isLoading = true else isRefreshing = true
         scope.launch {
             try {
                 val response = ApiClient.getPhotoService(context).getAlbums()
@@ -2178,7 +2265,7 @@ fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: 
             } catch (e: Exception) {
                 Toast.makeText(context, "Error fetching albums: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
-                isLoading = false
+                if (showLoadingState) isLoading = false else isRefreshing = false
             }
         }
     }
@@ -2218,11 +2305,16 @@ fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: 
     } else {
         // Show Albums List View
         LaunchedEffect(Unit) {
-            fetchAlbums()
+            fetchAlbums(true)
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
-            if (isLoading) {
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = { fetchAlbums(false) },
+                modifier = Modifier.fillMaxSize()
+            ) {
+                if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
@@ -2267,6 +2359,7 @@ fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: 
                         }
                     }
                 }
+            }
             }
             
             FloatingActionButton(
@@ -2478,13 +2571,23 @@ fun SharedUploadDialog(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val sessionManager = remember { SessionManager(context) }
-    var isUploading by remember { mutableStateOf(false) }
-    var uploadedCount by remember { mutableStateOf(0) }
-    var currentFileProgress by remember { mutableStateOf(0f) }
+
+    // WorkManager Integration
+    val workManager = remember { androidx.work.WorkManager.getInstance(context.applicationContext) }
+    val workInfosState = remember {
+        workManager.getWorkInfosForUniqueWorkFlow("ChegePhotosManualUpload")
+    }.collectAsState(initial = emptyList())
+
+    val workInfo = workInfosState.value.firstOrNull()
+    val isUploading = workInfo != null && workInfo.state == androidx.work.WorkInfo.State.RUNNING
+
+    val progressData = workInfo?.progress
+    val currentFileProgress = progressData?.getFloat("progress", 0f) ?: 0f
+    val uploadedCount = progressData?.getInt("current", 0) ?: 0
+
     var selectedAlbum by remember { mutableStateOf<PhotoAlbum?>(null) }
     var albums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
     var showAlbumMenu by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         try {
@@ -2494,16 +2597,20 @@ fun SharedUploadDialog(
             }
         } catch (_: Exception) { }
     }
-    
-    val localPhotos = remember(files.size) {
-        files.map { file ->
-            com.niccher.chege_photos_app.repository.LocalPhoto(
-                uri = android.net.Uri.fromFile(file),
-                file = file,
-                name = file.name,
-                size = file.length()
-            )
-        }.toMutableList()
+
+    LaunchedEffect(workInfo?.state) {
+        if (workInfo != null) {
+            if (workInfo.state == androidx.work.WorkInfo.State.SUCCEEDED) {
+                val output = workInfo.outputData
+                val succeeded = output.getInt("succeeded", 0)
+                val total = output.getInt("total", 0)
+                Toast.makeText(context, "Uploaded $succeeded out of $total items", Toast.LENGTH_SHORT).show()
+                files.forEach { it.delete() }
+                files.clear()
+            } else if (workInfo.state == androidx.work.WorkInfo.State.FAILED) {
+                Toast.makeText(context, "Upload failed or cancelled", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
     
     Dialog(
@@ -2559,39 +2666,61 @@ fun SharedUploadDialog(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         enabled = !isUploading,
                         onClick = {
-                            isUploading = true
-                            uploadedCount = 0
-                            showUploadNotification(context, 0, files.size)
-                            scope.launch {
-                                for ((index, localPhoto) in localPhotos.withIndex()) {
-                                    showUploadNotification(context, index + 1, files.size)
-                                    val result = repository.syncPhoto(localPhoto, albumId = selectedAlbum?.id) { progress ->
-                                        currentFileProgress = progress
-                                    }
-                                    if (result is PhotoSyncResult.Success) {
-                                        uploadedCount++
-                                        sessionManager.updateLastUpload()
-                                    }
-                                }
-                                showUploadNotification(context, uploadedCount, files.size, isFinished = true)
-                                Toast.makeText(context, "Uploaded $uploadedCount items", Toast.LENGTH_SHORT).show()
-                                files.forEach { it.delete() }
-                                files.clear()
-                            }
+                            val uris = files.map { android.net.Uri.fromFile(it).toString() }.toTypedArray()
+                            val filePaths = files.map { it.absolutePath }.toTypedArray()
+                            val names = files.map { it.name }.toTypedArray()
+                            val sizes = files.map { it.length() }.toLongArray()
+
+                            val inputData = androidx.work.workDataOf(
+                                "uris" to uris,
+                                "file_paths" to filePaths,
+                                "names" to names,
+                                "sizes" to sizes,
+                                "album_id" to selectedAlbum?.id
+                            )
+
+                            val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.niccher.chege_photos_app.utils.ManualUploadWorker>()
+                                .setInputData(inputData)
+                                .build()
+
+                            workManager.enqueueUniqueWork(
+                                "ChegePhotosManualUpload",
+                                androidx.work.ExistingWorkPolicy.REPLACE,
+                                workRequest
+                            )
                         }
                     ) {
-                        Text(if (isUploading) "Uploading... ($uploadedCount/${files.size})" else "Upload All (${files.size} items)")
+                        Text(if (isUploading) "Uploading... (${uploadedCount}/${files.size})" else "Upload All (${files.size} items)")
                     }
                     
                     if (isUploading) {
-                        val overallProgress = if (files.isNotEmpty()) (uploadedCount.toFloat() + currentFileProgress) / files.size else 0f
                         Column(modifier = Modifier.padding(vertical = 8.dp)) {
                             LinearProgressIndicator(
-                                progress = overallProgress,
+                                progress = { currentFileProgress },
                                 modifier = Modifier.fillMaxWidth().height(8.dp),
                                 color = MaterialTheme.colorScheme.primary,
                                 strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
                             )
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Uploading... (${(currentFileProgress * 100).toInt()}%)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = "Cancel",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.clickable {
+                                        workManager.cancelUniqueWork("ChegePhotosManualUpload")
+                                    }.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
                         }
                     }
                     
@@ -2600,7 +2729,10 @@ fun SharedUploadDialog(
                         modifier = Modifier.fillMaxSize().padding(top = 8.dp),
                         contentPadding = PaddingValues(4.dp)
                     ) {
-                        itemsIndexed(files) { _, file ->
+                        itemsIndexed(
+                            items = files,
+                            key = { _, file -> file.absolutePath }
+                        ) { _, file ->
                             Card(modifier = Modifier.padding(4.dp).fillMaxWidth()) {
                                 AsyncImage(
                                     model = file,
@@ -2674,6 +2806,59 @@ fun ProfileScreen(sessionManager: com.niccher.chege_photos_app.utils.SessionMana
                                 sessionManager.setBiometricEnabled(false)
                                 checked = false
                             }
+                        }
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                var autoBackupChecked by remember { mutableStateOf(sessionManager.isBackupAutoEnabled()) }
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), 
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "Auto Backup", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    Switch(
+                        checked = autoBackupChecked,
+                        onCheckedChange = { 
+                            sessionManager.setBackupAutoEnabled(it)
+                            autoBackupChecked = it
+                            (context as? MainActivity)?.scheduleBackgroundSync()
+                        }
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), 
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "Backup Only on Wi-Fi", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    var wifiOnlyChecked by remember { mutableStateOf(sessionManager.isBackupOnlyWifi()) }
+                    Switch(
+                        checked = wifiOnlyChecked,
+                        enabled = autoBackupChecked,
+                        onCheckedChange = { 
+                            sessionManager.setBackupOnlyWifi(it)
+                            wifiOnlyChecked = it
+                            (context as? MainActivity)?.scheduleBackgroundSync()
+                        }
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), 
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "Backup Only When Charging", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    var chargingOnlyChecked by remember { mutableStateOf(sessionManager.isBackupOnlyCharging()) }
+                    Switch(
+                        checked = chargingOnlyChecked,
+                        enabled = autoBackupChecked,
+                        onCheckedChange = { 
+                            sessionManager.setBackupOnlyCharging(it)
+                            chargingOnlyChecked = it
+                            (context as? MainActivity)?.scheduleBackgroundSync()
                         }
                     )
                 }
@@ -2828,10 +3013,10 @@ fun ThemeOption(
 }
 
 data class ExifInfo(
-    val camera: String = "Smartphone Camera",
-    val iso: String = "100",
-    val shutter: String = "1/120s",
-    val aperture: String = "f/1.8",
+    val camera: String? = null,
+    val iso: String? = null,
+    val shutter: String? = null,
+    val aperture: String? = null,
     val latitude: Double? = null,
     val longitude: Double? = null
 )
@@ -2874,10 +3059,10 @@ fun PhotoDetailsBottomSheet(
                 val hasLatLong = exif.getLatLong(latLong)
                 
                 ExifInfo(
-                    camera = exif.getAttribute(ExifInterface.TAG_MODEL) ?: "Smartphone Camera",
-                    iso = exif.getAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS) ?: "100",
-                    shutter = exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)?.let { "${it}s" } ?: "1/120s",
-                    aperture = exif.getAttribute(ExifInterface.TAG_F_NUMBER)?.let { "f/$it" } ?: "f/1.8",
+                    camera = exif.getAttribute(ExifInterface.TAG_MODEL)?.takeIf { it.isNotBlank() },
+                    iso = exif.getAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS)?.takeIf { it.isNotBlank() },
+                    shutter = exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)?.takeIf { it.isNotBlank() }?.let { "${it}s" },
+                    aperture = exif.getAttribute(ExifInterface.TAG_F_NUMBER)?.takeIf { it.isNotBlank() }?.let { "f/$it" },
                     latitude = if (hasLatLong) latLong[0].toDouble() else null,
                     longitude = if (hasLatLong) latLong[1].toDouble() else null
                 )
@@ -2908,10 +3093,10 @@ fun PhotoDetailsBottomSheet(
                     return v
                 }
                 ExifInfo(
-                    camera = safeGetString("Model") ?: safeGetString("Make") ?: "Smartphone Camera",
-                    iso = safeGetString("ISOSpeedRatings") ?: "100",
-                    shutter = rational(safeGetString("ExposureTime"))?.let { "${it}s" } ?: "1/120s",
-                    aperture = rational(safeGetString("FNumber"))?.let { "f/$it" } ?: "f/1.8",
+                    camera = safeGetString("Model") ?: safeGetString("Make"),
+                    iso = safeGetString("ISOSpeedRatings"),
+                    shutter = rational(safeGetString("ExposureTime"))?.let { "${it}s" },
+                    aperture = rational(safeGetString("FNumber"))?.let { "f/$it" },
                     latitude = photo.latitude?.toDoubleOrNull(),
                     longitude = photo.longitude?.toDoubleOrNull()
                 )
@@ -3147,11 +3332,14 @@ fun PhotoDetailsBottomSheet(
             Spacer(modifier = Modifier.height(24.dp))
 
             // EXIF Section
-            MetadataSection(title = "Camera EXIF") {
-                MetadataRow(Icons.Default.CameraAlt, "Camera", exifData.camera)
-                MetadataRow(Icons.Default.Iso, "ISO", exifData.iso)
-                MetadataRow(Icons.Default.ShutterSpeed, "Shutter", exifData.shutter)
-                MetadataRow(Icons.Default.Camera, "Aperture", exifData.aperture)
+            if (exifData.camera != null || exifData.iso != null || exifData.shutter != null || exifData.aperture != null) {
+                Spacer(modifier = Modifier.height(24.dp))
+                MetadataSection(title = "Camera EXIF") {
+                    exifData.camera?.let { MetadataRow(Icons.Default.CameraAlt, "Camera", it) }
+                    exifData.iso?.let { MetadataRow(Icons.Default.Iso, "ISO", it) }
+                    exifData.shutter?.let { MetadataRow(Icons.Default.ShutterSpeed, "Shutter", it) }
+                    exifData.aperture?.let { MetadataRow(Icons.Default.Camera, "Aperture", it) }
+                }
             }
 
             // Location Section
@@ -3667,14 +3855,7 @@ fun FaceSearchScreen(baseUrl: String) {
     var searchResults by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.FaceSearchResult>>(emptyList()) }
     var searchError by remember { mutableStateOf<String?>(null) }
 
-    val coilImageLoader = remember(context) {
-        coil.ImageLoader.Builder(context)
-            .okHttpClient { com.niccher.chege_photos_app.network.ApiClient.getHttpClient(context) }
-            .crossfade(false)
-            .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-            .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-            .build()
-    }
+    val coilImageLoader = remember(context) { ApiClient.getImageLoader(context) }
 
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -3890,14 +4071,7 @@ fun PersonPhotosScreen(
     var loading by remember { mutableStateOf(true) }
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
 
-    val coilImageLoader = remember(context) {
-        ImageLoader.Builder(context)
-            .okHttpClient { com.niccher.chege_photos_app.network.ApiClient.getHttpClient(context) }
-            .crossfade(false)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            .build()
-    }
+    val coilImageLoader = remember(context) { ApiClient.getImageLoader(context) }
 
     LaunchedEffect(personId) {
         try {

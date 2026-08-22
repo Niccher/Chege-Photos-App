@@ -19,6 +19,8 @@ import retrofit2.Response
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 sealed class PhotoSyncResult {
     data object Success : PhotoSyncResult()
@@ -108,6 +110,10 @@ class PhotoRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e("PhotoRepository", "Failed to clear database cache", e)
         }
+    }
+
+    fun getPhotosFlow(): Flow<List<Photo>> {
+        return photoDao.getAllPhotos().map { list -> list.map { it.toPhoto() } }
     }
 
     suspend fun getRemotePhotos(): List<Photo> {

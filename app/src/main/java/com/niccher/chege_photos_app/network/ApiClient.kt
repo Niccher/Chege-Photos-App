@@ -138,6 +138,11 @@ object ApiClient {
 
     fun getPhotoService(context: Context): PhotoService {
         if (_photoService == null) {
+            val sharedPrefs = context.getSharedPreferences("chege_photos_prefs", Context.MODE_PRIVATE)
+            val savedUrl = sharedPrefs.getString("server_url", null)
+            if (savedUrl != null) {
+                baseUrl = normalizeUrl(savedUrl)
+            }
             try {
                 _photoService = createService(baseUrl, context)
             } catch (e: Exception) {
@@ -172,5 +177,31 @@ object ApiClient {
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(PhotoService::class.java)
+    }
+
+    private var _imageLoader: coil.ImageLoader? = null
+
+    fun getImageLoader(context: Context): coil.ImageLoader {
+        if (_imageLoader == null) {
+            val appCtx = context.applicationContext
+            _imageLoader = coil.ImageLoader.Builder(appCtx)
+                .okHttpClient { getHttpClient(appCtx) }
+                .crossfade(true)
+                .memoryCache {
+                    coil.memory.MemoryCache.Builder(appCtx)
+                        .maxSizePercent(0.25)
+                        .build()
+                }
+                .diskCache {
+                    coil.disk.DiskCache.Builder()
+                        .directory(appCtx.cacheDir.resolve("image_cache"))
+                        .maxSizeBytes(100 * 1024 * 1024) // 100MB
+                        .build()
+                }
+                .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                .build()
+        }
+        return _imageLoader!!
     }
 }
