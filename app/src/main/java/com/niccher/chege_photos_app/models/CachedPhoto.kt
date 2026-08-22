@@ -22,7 +22,8 @@ data class CachedPhoto(
     val is_favorite: Int = 0,
     val album_id: Int? = null,
     val created_at: String? = null,
-    val updated_at: String? = null
+    val updated_at: String? = null,
+    val sha256: String? = null
 ) {
     fun toPhoto() = Photo(
         id = id,
@@ -60,5 +61,6 @@ fun Photo.toCachedPhoto() = CachedPhoto(
     is_favorite = is_favorite?.toIntOrNull() ?: 0,
     album_id = album_id?.toIntOrNull(),
     created_at = created_at,
-    updated_at = updated_at
+    updated_at = updated_at,
+    sha256 = null // Populated client-side
 )

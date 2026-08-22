@@ -77,6 +77,30 @@ class SessionManager(context: Context) {
         prefs.edit().putBoolean(KEY_BIOMETRIC_ENABLED, enabled).apply()
     }
 
+    fun isBackupAutoEnabled(): Boolean {
+        return prefs.getBoolean("backup_auto_enabled", true)
+    }
+
+    fun setBackupAutoEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("backup_auto_enabled", enabled).apply()
+    }
+
+    fun isBackupOnlyWifi(): Boolean {
+        return prefs.getBoolean("backup_only_wifi", true)
+    }
+
+    fun setBackupOnlyWifi(onlyWifi: Boolean) {
+        prefs.edit().putBoolean("backup_only_wifi", onlyWifi).apply()
+    }
+
+    fun isBackupOnlyCharging(): Boolean {
+        return prefs.getBoolean("backup_only_charging", true)
+    }
+
+    fun setBackupOnlyCharging(onlyCharging: Boolean) {
+        prefs.edit().putBoolean("backup_only_charging", onlyCharging).apply()
+    }
+
     fun clearSession() {
         prefs.edit().clear().apply()
     }

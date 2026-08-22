@@ -60,6 +60,8 @@ The app communicates with the web backend via Retrofit 2 (with kotlinx.serializa
 ### Sync & Upload
 - **MediaStore scan** — Scans device's `MediaStore.Images.Media` for local photos
 - **Batch upload** — Uploads local photos to server with per-file progress callbacks and device fingerprint tracking
+- **Background Sync** — Utilises `OfflineSyncWorker` and `SyncWorker` via Android WorkManager for automated and queued sync operations
+- **Offline Actions** — Queue photo actions (archive, favorite, delete) locally when offline, automatically synced on connection restore
 - **Notification** — Upload progress posted as Android notification
 - **Auto-retry** — Failed uploads can be retried from the sync screen
 
@@ -74,7 +76,8 @@ The app communicates with the web backend via Retrofit 2 (with kotlinx.serializa
 - **CRUD** — Create, rename, delete albums
 - **Add photos** — From multi-select action bar in any photo list
 
-### Faces (requires ML service)
+### Faces & Local Detection
+- **Local Face Detection** — On-device face bounding box detection using Google ML Kit (`LocalFaceDetector`)
 - **Person grid** — All detected persons with face thumbnails; tap to view photos containing that person
 - **Person photo viewer** — Grid of photos for a selected person; tap to open fullscreen pager
 - **Person photo pager** — Horizontal swipe through all person photos with:
@@ -84,16 +87,18 @@ The app communicates with the web backend via Retrofit 2 (with kotlinx.serializa
 - **Photo detail overlay** — Tapping the photo info button shows a bottom sheet with face list, person names, and EXIF metadata
 - **Face search** — Upload a photo to find matching faces across the library
 
-### Memories, Explore, Archive, Trash, Favorites
+### Memories, Explore, Archive, Trash, Favorites & Widgets
 - **Memories** — On-this-day and 6-months-ago feed (two feeds served by the backend)
+- **App Widget** — Home screen widget (`MemoriesWidgetProvider`) displaying rotating memories and favorite photos
 - **Explore** — Public / shared photo feed
 - **Archive** — Archived photos (tap to view, with option to unarchive)
 - **Trash** — Soft-deleted photos (with restore option)
 - **Favorites** — Filtered view of favorited photos
 
-### Sharing
+### Sharing & Capture
 - **Share intents** — Supports `ACTION_SEND` and `ACTION_SEND_MULTIPLE` for images and videos from other apps
 - **Upload dialog** — Incoming share intents show a dialog to select target album before uploading
+- **Portrait Capture** — Dedicated `PortraitCaptureActivity` to capture portraits using camera interface
 
 ### Authentication & Security
 - **Email/password login** — Standard credential login via `POST /api/login`. A default superuser profile is seeded automatically for administrative overrides (`superadmin@eavesdroid.com` / `SuperAdmin@2024!`).
@@ -216,7 +221,6 @@ Chege_Photos_App/
 │       ├── AndroidManifest.xml       # Permissions, activities, intent filters
 │       ├── java/com/niccher/chege_photos_app/
 │       │   ├── MainActivity.kt       # Single activity, all composable screens (3400+ lines)
-│       │   ├── QrScannerActivity.kt   # CameraX + ML Kit barcode scanner
 │       │   ├── data/
 │       │   │   └── PhotoDatabase.kt  # Room database, DAO, migrations
 │       │   ├── models/
@@ -224,7 +228,8 @@ Chege_Photos_App/
 │       │   │   ├── AlbumResponse.kt  # Album, AlbumListResponse, SingleAlbumResponse
 │       │   │   ├── AuthResponse.kt   # AuthResponse, UserInfo
 │       │   │   ├── FaceData.kt       # FaceData, PersonData, PersonPhoto, search models
-│       │   │   └── CachedPhoto.kt    # Room entity ↔ Photo converter
+│       │   │   ├── CachedPhoto.kt    # Room entity ↔ Photo converter
+│       │   │   └── OfflineAction.kt  # Queued offline photo mutations
 │       │   ├── network/
 │       │   │   ├── ApiClient.kt      # Retrofit singleton, OkHttp, URL normalisation
 │       │   │   └── PhotoService.kt   # Retrofit interface (all 24 endpoints)
@@ -237,7 +242,13 @@ Chege_Photos_App/
 │       │   └── utils/
 │       │       ├── SessionManager.kt # SharedPreferences: auth, theme, biometric, user prefs
 │       │       ├── DeviceFingerprint.kt # SHA-256 build-field fingerprint
-│       │       └── ProgressRequestBody.kt # OkHttp upload progress wrapper
+│       │       ├── ProgressRequestBody.kt # OkHttp upload progress wrapper
+│       │       ├── HashUtils.kt      # File hashing utilities
+│       │       ├── LocalFaceDetector.kt # On-device Google ML Kit face detector
+│       │       ├── MemoriesWidgetProvider.kt # Home screen memories/favorites widget
+│       │       ├── OfflineSyncWorker.kt # Worker to sync offline actions
+│       │       ├── SyncWorker.kt     # Worker to sync local MediaStore photos
+│       │       └── PortraitCaptureActivity.kt # CameraX portrait photo capture
 │       └── res/                      # Drawables, layouts, strings, themes, XML config
 ├── gradle/
 │   ├── libs.versions.toml            # Version catalog (all dependency versions)
@@ -272,7 +283,7 @@ Chege_Photos_App/
 | Profile | `ProfileScreen` | User details, biometric toggle |
 | Server Config | `ServerConfigScreen` | Backend URL, connection test |
 | About | `AboutScreen` | App version, how-it-works, libraries |
-| QR Scanner | `QrScannerActivity` | CameraX + ML Kit barcode scanner |
+| Portrait Capture | `PortraitCaptureActivity` | CameraX portrait photo capture |
 | Photo detail | *(fullscreen dialog)* | Carousel, zoom/pan, face overlays, info sheet |
 
 ---

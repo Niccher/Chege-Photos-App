@@ -10,10 +10,10 @@ import retrofit2.http.*
 
 interface PhotoService {
 
-    @GET("api/test")
+    @GET("api/v1/test")
     suspend fun ping(): Response<ResponseBody>
 
-    @POST("api/login")
+    @POST("api/v1/login")
     @FormUrlEncoded
     suspend fun login(
         @Field("email") email: String,
@@ -22,7 +22,7 @@ interface PhotoService {
         @Field("device_id") deviceId: String = ""
     ): Response<AuthResponse>
 
-    @POST("api/auth-with-token")
+    @POST("api/v1/auth-with-token")
     @FormUrlEncoded
     suspend fun authWithToken(
         @Field("token") token: String,
@@ -31,32 +31,38 @@ interface PhotoService {
         @Field("device_name") deviceName: String = "Android Device"
     ): Response<AuthResponse>
 
-    @GET("api/photos")
+    @GET("api/v1/photos")
     suspend fun getRemotePhotos(): Response<PhotoListResponse>
 
-    @GET("api/albums")
+    @GET("api/v1/albums")
     suspend fun getAlbums(): Response<com.niccher.chege_photos_app.models.AlbumListResponse>
 
-    @GET("api/albums/{albumId}/photos")
+    @GET("api/v1/albums/{albumId}/photos")
     suspend fun getAlbumPhotos(@Path("albumId") albumId: String): Response<PhotoListResponse>
 
-    @GET("api/memories")
+    @GET("api/v1/memories")
     suspend fun getMemories(): Response<PhotoListResponse>
 
-    @GET("api/favorites")
+    @GET("api/v1/favorites")
     suspend fun getFavorites(): Response<PhotoListResponse>
 
-    @GET("api/archive")
+    @GET("api/v1/archive")
     suspend fun getArchived(): Response<PhotoListResponse>
 
-    @GET("api/trash")
+    @GET("api/v1/trash")
     suspend fun getTrash(): Response<PhotoListResponse>
 
-    @GET("api/explore")
+    @GET("api/v1/explore")
     suspend fun getExplore(): Response<PhotoListResponse>
 
+    @POST("api/v1/photos/exists-by-hash")
+    @FormUrlEncoded
+    suspend fun checkPhotoExistsByHash(
+        @Field("sha256") sha256: String
+    ): Response<AuthResponse>
+
     @Multipart
-    @POST("api/upload")
+    @POST("api/v1/upload")
     suspend fun uploadPhoto(
         @Part file: MultipartBody.Part,
         @Part deviceId: MultipartBody.Part,
@@ -64,40 +70,40 @@ interface PhotoService {
         @Part albumId: MultipartBody.Part? = null
     ): Response<AuthResponse>
 
-    @POST("photos/delete/{id}")
+    @POST("api/v1/photos/delete/{id}")
     suspend fun deletePhoto(@Path("id") id: String): Response<AuthResponse>
 
-    @POST("photos/restore/{id}")
+    @POST("api/v1/photos/restore/{id}")
     suspend fun restorePhoto(@Path("id") id: String): Response<AuthResponse>
 
-    @POST("photos/archive/{id}")
+    @POST("api/v1/photos/archive/{id}")
     suspend fun archivePhoto(@Path("id") id: String): Response<AuthResponse>
 
-    @POST("photos/favorite/{id}")
+    @POST("api/v1/photos/favorite/{id}")
     suspend fun favoritePhoto(@Path("id") id: String): Response<AuthResponse>
 
     @FormUrlEncoded
-    @POST("api/albums")
+    @POST("api/v1/albums")
     suspend fun createAlbum(
         @Field("name") name: String,
         @Field("description") description: String? = null
     ): Response<com.niccher.chege_photos_app.models.SingleAlbumResponse>
 
     @FormUrlEncoded
-    @PUT("api/albums/{id}")
+    @PUT("api/v1/albums/{id}")
     suspend fun updateAlbum(
         @Path("id") id: String,
         @Field("name") name: String,
         @Field("description") description: String? = null
     ): Response<com.niccher.chege_photos_app.models.SingleAlbumResponse>
 
-    @DELETE("api/albums/{id}")
+    @DELETE("api/v1/albums/{id}")
     suspend fun deleteAlbum(
         @Path("id") id: String
     ): Response<AuthResponse>
 
     @FormUrlEncoded
-    @POST("albums/add-photo")
+    @POST("api/v1/albums/add-photo")
     suspend fun addPhotoToAlbum(
         @Field("album_id") albumId: String,
         @Field("photo_id") photoId: String
@@ -105,22 +111,22 @@ interface PhotoService {
 
     // ── Face endpoints ─────────────────────────────────────────────
 
-    @GET("api/faces/{photoId}")
+    @GET("api/v1/faces/{photoId}")
     suspend fun getFacesByPhoto(
         @Path("photoId") photoId: Int
     ): Response<com.niccher.chege_photos_app.models.FacesListResponse>
 
     @Multipart
-    @POST("api/faces/search")
+    @POST("api/v1/faces/search")
     suspend fun searchFacesByPhoto(
         @Part file: okhttp3.MultipartBody.Part,
         @Part limit: okhttp3.MultipartBody.Part
     ): Response<com.niccher.chege_photos_app.models.FaceSearchResponse>
 
-    @GET("api/faces/persons")
+    @GET("api/v1/faces/persons")
     suspend fun getPersons(): Response<com.niccher.chege_photos_app.models.PersonsListResponse>
 
-    @GET("api/faces/by-person/{personId}")
+    @GET("api/v1/faces/by-person/{personId}")
     suspend fun getPersonPhotos(
         @Path("personId") personId: Int
     ): Response<com.niccher.chege_photos_app.models.PersonPhotosResponse>

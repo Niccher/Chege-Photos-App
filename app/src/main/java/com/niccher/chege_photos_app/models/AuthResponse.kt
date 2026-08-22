@@ -10,7 +10,8 @@ data class AuthResponse(
     val status: String? = null,
     val access_token: String? = null,
     val user: UserInfo? = null,
-    val message: JsonElement? = null
+    val message: JsonElement? = null,
+    val id: Int? = null
 ) {
     val messageText: String?
         get() = try {

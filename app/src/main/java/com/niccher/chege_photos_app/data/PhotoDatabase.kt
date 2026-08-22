@@ -4,6 +4,7 @@ import androidx.room.*
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.niccher.chege_photos_app.models.CachedPhoto
+import com.niccher.chege_photos_app.models.OfflineAction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -22,11 +23,30 @@ interface PhotoDao {
     
     @Query("SELECT * FROM cached_photos WHERE id = :id")
     suspend fun getPhotoById(id: String): CachedPhoto?
+
+    @Query("SELECT * FROM cached_photos WHERE sha256 = :sha256 LIMIT 1")
+    suspend fun getPhotoBySha256(sha256: String): CachedPhoto?
+
+    @Query("DELETE FROM cached_photos WHERE id = :id")
+    suspend fun deleteById(id: String)
 }
 
-@Database(entities = [CachedPhoto::class], version = 3, exportSchema = false)
+@Dao
+interface OfflineActionDao {
+    @Query("SELECT * FROM pending_actions ORDER BY timestamp ASC")
+    suspend fun getAllPendingActions(): List<OfflineAction>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAction(action: OfflineAction)
+
+    @Query("DELETE FROM pending_actions WHERE localId = :localId")
+    suspend fun deleteActionById(localId: Long)
+}
+
+@Database(entities = [CachedPhoto::class, OfflineAction::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
+    abstract fun offlineActionDao(): OfflineActionDao
 
     companion object {
         @Volatile
@@ -66,13 +86,31 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cached_photos ADD COLUMN sha256 TEXT DEFAULT NULL")
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS pending_actions (" +
+                        "localId INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "photoId TEXT NOT NULL, " +
+                        "actionType TEXT NOT NULL, " +
+                        "timestamp INTEGER NOT NULL)"
+                )
+            }
+        }
+
         fun getDatabase(context: android.content.Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "photo_database"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                 INSTANCE = instance
                 instance

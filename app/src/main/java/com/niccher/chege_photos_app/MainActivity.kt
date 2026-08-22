@@ -1,9 +1,19 @@
 package com.niccher.chege_photos_app
 
 import com.niccher.chege_photos_app.R
+import android.util.Log
 import android.Manifest
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculateCentroidSize
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateRotation
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import android.os.Build
@@ -114,12 +124,69 @@ class MainActivity : FragmentActivity() {
         val sessionManager = SessionManager(this)
         selectedTheme.value = com.niccher.chege_photos_app.ui.theme.AppTheme.valueOf(sessionManager.getTheme())
 
+        scheduleBackgroundSync()
+        scheduleOfflineActionsSync()
+
         enableEdgeToEdge()
         setContent {
             ChegePhotosTheme(appTheme = selectedTheme.value) {
                 MainScreen(photoRepository, pendingSharedFiles, selectedTheme)
             }
         }
+    }
+
+    private fun scheduleBackgroundSync() {
+        val sessionManager = SessionManager(this)
+        val workManager = androidx.work.WorkManager.getInstance(applicationContext)
+
+        if (!sessionManager.isBackupAutoEnabled()) {
+            workManager.cancelUniqueWork("ChegePhotosSyncWork")
+            Log.d("MainActivity", "Background auto-backup is disabled. Cancelled pending work.")
+            return
+        }
+
+        val netType = if (sessionManager.isBackupOnlyWifi()) {
+            androidx.work.NetworkType.UNMETERED
+        } else {
+            androidx.work.NetworkType.CONNECTED
+        }
+
+        val constraints = androidx.work.Constraints.Builder()
+            .setRequiredNetworkType(netType)
+            .setRequiresCharging(sessionManager.isBackupOnlyCharging())
+            .build()
+
+        val syncWorkRequest = androidx.work.PeriodicWorkRequestBuilder<com.niccher.chege_photos_app.utils.SyncWorker>(
+            1, java.util.concurrent.TimeUnit.DAYS
+        )
+            .setConstraints(constraints)
+            .build()
+
+        workManager.enqueueUniquePeriodicWork(
+            "ChegePhotosSyncWork",
+            androidx.work.ExistingPeriodicWorkPolicy.REPLACE, // Update constraints if they changed
+            syncWorkRequest
+        )
+        Log.d("MainActivity", "Scheduled background auto-backup with current constraints.")
+    }
+
+    private fun scheduleOfflineActionsSync() {
+        val constraints = androidx.work.Constraints.Builder()
+            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+            .build()
+
+        val offlineSyncRequest = androidx.work.PeriodicWorkRequestBuilder<com.niccher.chege_photos_app.utils.OfflineSyncWorker>(
+            1, java.util.concurrent.TimeUnit.HOURS // Check for offline actions every hour
+        )
+            .setConstraints(constraints)
+            .build()
+
+        androidx.work.WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+            "ChegePhotosOfflineSyncWork",
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            offlineSyncRequest
+        )
+        Log.d("MainActivity", "Scheduled background offline actions sync work.")
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
@@ -356,6 +423,9 @@ fun MainScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showLogoutDialog = false
+                    scope.launch {
+                        repository.clearLocalData()
+                    }
                     sessionManager.clearSession()
                     isLoggedIn = false
                 }) {
@@ -807,15 +877,26 @@ fun RemotePhotoListScreen(
                                 border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
                             ) {
                                 Box {
+                                    val imageModel = remember(photo, baseUrl) {
+                                        val p = photo.thumbnail_path ?: photo.path
+                                        if (p.startsWith("/") || p.startsWith("content:")) {
+                                            p
+                                        } else {
+                                            baseUrl.trimEnd('/') + "/" + p.trimStart('/')
+                                        }
+                                    }
                                     AsyncImage(
-                                        model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path?.trimStart('/') ?: photo.path?.trimStart('/') ?: ""),
+                                        model = imageModel,
                                         contentDescription = photo.filename,
                                         imageLoader = coilImageLoader,
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(150.dp)
                                             .background(Color.DarkGray),
-                                        contentScale = ContentScale.Crop
+                                        contentScale = ContentScale.Crop,
+                                        onError = { state ->
+                                            android.util.Log.e("CoilImageLoad", "Failed to load image: ${state.result.request.data} - ${state.result.throwable.message}", state.result.throwable)
+                                        }
                                     )
                                     
                                     if (isSelected) {
@@ -1034,6 +1115,28 @@ fun RemotePhotoListScreen(
                     val photo = filteredPhotos[pagerState.currentPage]
                     val pid = photo.id?.toIntOrNull() ?: return@LaunchedEffect
                     if (!facesMap.containsKey(pid)) {
+                        // 1. Kickoff local ML Kit face detection first to show instant boxes
+                        scope.launch {
+                            try {
+                                val imageUrl = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/')
+                                val request = coil.request.ImageRequest.Builder(context)
+                                    .data(imageUrl)
+                                    .build()
+                                val result = coilImageLoader.execute(request)
+                                val drawable = result.drawable
+                                if (drawable is android.graphics.drawable.BitmapDrawable) {
+                                    val bitmap = drawable.bitmap
+                                    val localFaces = com.niccher.chege_photos_app.utils.LocalFaceDetector.detectFaces(bitmap)
+                                    if (localFaces.isNotEmpty() && !facesMap.containsKey(pid)) {
+                                        facesMap = facesMap + (pid to localFaces)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e("MainActivity", "Failed to run offline face detection: ${e.message}")
+                            }
+                        }
+
+                        // 2. Fetch server InsightFace scan
                         try {
                             val resp = ApiClient.getPhotoService(context).getFacesByPhoto(pid)
                             if (resp.isSuccessful) {
@@ -1065,31 +1168,67 @@ fun RemotePhotoListScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .pointerInput(Unit) {
-                                detectTransformGestures { _, pan, zoom, _ ->
-                                    scale = (scale * zoom).coerceIn(1f, 5f)
-                                    if (scale > 1f) {
-                                        offset += pan
-                                    } else {
-                                        offset = Offset.Zero
-                                    }
-                                }
+                            .pointerInput(scale) {
+                                detectTransformGesturesCustom(
+                                    onGesture = { centroid, pan, zoom, rotation ->
+                                        scale = (scale * zoom).coerceIn(1f, 5f)
+                                        if (scale > 1f) {
+                                            offset += pan
+                                        } else {
+                                            offset = Offset.Zero
+                                        }
+                                    },
+                                    consumeEnabled = scale > 1f
+                                )
                             }
+                            .draggable(
+                                state = androidx.compose.foundation.gestures.rememberDraggableState { delta ->
+                                    if (scale == 1f) {
+                                        if (delta < -15f) { // Swipe up
+                                            showInfoSheet = true
+                                        } else if (delta > 15f) { // Swipe down
+                                            if (showInfoSheet) {
+                                                showInfoSheet = false
+                                            } else {
+                                                selectedPhotoIndex = null
+                                            }
+                                        }
+                                    }
+                                },
+                                orientation = androidx.compose.foundation.gestures.Orientation.Vertical
+                            )
                     ) {
-                        AsyncImage(
-                            model = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/'),
-                            contentDescription = photo.filename,
-                            imageLoader = coilImageLoader,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .graphicsLayer(
-                                    scaleX = scale,
-                                    scaleY = scale,
-                                    translationX = offset.x,
-                                    translationY = offset.y
-                                ),
-                            contentScale = ContentScale.Fit
-                        )
+                        val imageModel = remember(photo, baseUrl) {
+                            val p = photo.path
+                            if (p.startsWith("/") || p.startsWith("content:")) {
+                                p
+                            } else {
+                                baseUrl.trimEnd('/') + "/" + p.trimStart('/')
+                            }
+                        }
+                        val isVideo = photo.mime_type?.contains("video", ignoreCase = true) == true || 
+                                      photo.filename.endsWith(".mp4", ignoreCase = true) ||
+                                      photo.filename.endsWith(".webm", ignoreCase = true) ||
+                                      photo.filename.endsWith(".mkv", ignoreCase = true)
+
+                        if (isVideo) {
+                            VideoPlayer(videoUrl = imageModel, modifier = Modifier.fillMaxSize())
+                        } else {
+                            AsyncImage(
+                                model = imageModel,
+                                contentDescription = photo.filename,
+                                imageLoader = coilImageLoader,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer(
+                                        scaleX = scale,
+                                        scaleY = scale,
+                                        translationX = offset.x,
+                                        translationY = offset.y
+                                    ),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
 
                         // Face bounding boxes overlay
                         val pid = photo.id?.toIntOrNull()
@@ -1099,19 +1238,37 @@ fun RemotePhotoListScreen(
                                 Canvas(modifier = Modifier.fillMaxSize()) {
                                     val cw = this.size.width
                                     val ch = this.size.height
-                                    val pw = photo.width?.toFloatOrNull() ?: cw
-                                    val ph = photo.height?.toFloatOrNull() ?: ch
-                                    for (face in faces) {
-                                        val left = ((face.bbox.x / pw) * cw).toFloat()
-                                        val top = ((face.bbox.y / ph) * ch).toFloat()
-                                        val right = (((face.bbox.x + face.bbox.w) / pw) * cw).toFloat()
-                                        val bottom = (((face.bbox.y + face.bbox.h) / ph) * ch).toFloat()
-                                        drawRect(
-                                            color = androidx.compose.ui.graphics.Color(0xFF00FF00).copy(alpha = 0.5f),
-                                            topLeft = androidx.compose.ui.geometry.Offset(left, top),
-                                            size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
-                                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
-                                        )
+                                    val pw = photo.width?.toFloatOrNull()
+                                    val ph = photo.height?.toFloatOrNull()
+                                    if (pw != null && ph != null && pw > 0f && ph > 0f) {
+                                        val scaleFactor = minOf(cw / pw, ch / ph)
+                                        val dx = (cw - (pw * scaleFactor)) / 2f
+                                        val dy = (ch - (ph * scaleFactor)) / 2f
+                                        for (face in faces) {
+                                            val left = dx + (face.bbox.x.toFloat() * scaleFactor)
+                                            val top = dy + (face.bbox.y.toFloat() * scaleFactor)
+                                            val w = face.bbox.w.toFloat() * scaleFactor
+                                            val h = face.bbox.h.toFloat() * scaleFactor
+                                            drawRect(
+                                                color = androidx.compose.ui.graphics.Color(0xFF00FF00).copy(alpha = 0.5f),
+                                                topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                                                size = androidx.compose.ui.geometry.Size(w, h),
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
+                                            )
+                                        }
+                                    } else {
+                                        for (face in faces) {
+                                            val left = ((face.bbox.x / cw) * cw).toFloat()
+                                            val top = ((face.bbox.y / ch) * ch).toFloat()
+                                            val w = (face.bbox.w / cw * cw).toFloat()
+                                            val h = (face.bbox.h / ch * ch).toFloat()
+                                            drawRect(
+                                                color = androidx.compose.ui.graphics.Color(0xFF00FF00).copy(alpha = 0.5f),
+                                                topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                                                size = androidx.compose.ui.geometry.Size(w, h),
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1129,57 +1286,31 @@ fun RemotePhotoListScreen(
                     }
                 }
 
-                // Top-Right Controls
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.End
+                // Image Counter Overlay
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(bottom = 32.dp),
+                    contentAlignment = Alignment.BottomCenter
                 ) {
-                    val currentPhoto = filteredPhotos[pagerState.currentPage]
-                    IconButton(
-                        onClick = { 
-                            scope.launch {
-                                downloadRemotePhoto(context, baseUrl, currentPhoto)?.let {
-                                    Toast.makeText(context, "Downloaded to Gallery", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White)
-                    }
-                    IconButton(onClick = { showFaces = !showFaces }) {
-                        Icon(Icons.Default.Face, contentDescription = "Toggle Faces", tint = if (showFaces) Color.Green else Color.White)
-                    }
-                    IconButton(onClick = { showInfoSheet = true }) {
-                        Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
-                    }
-                    IconButton(onClick = { selectedPhotoIndex = null }) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                        Text(
+                            text = "${pagerState.currentPage + 1} of ${filteredPhotos.size}",
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
                 }
 
-                // Info Overlay
-                val currentPhoto = filteredPhotos[pagerState.currentPage]
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.6f))
-                        .padding(16.dp)
-                ) {
-                    Text(text = currentPhoto.filename, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-                    val sizeBytes = currentPhoto.size?.toLongOrNull() ?: 0L
-                    Text(text = "Size: ${formatSize(sizeBytes)}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                    if (currentPhoto.width != null && currentPhoto.height != null) {
-                        Text(text = "Dimensions: ${currentPhoto.width} x ${currentPhoto.height}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-
+                // Top-Right Controls
                 if (showInfoSheet) {
+                    val currentPhoto = filteredPhotos[pagerState.currentPage]
                     PhotoDetailsBottomSheet(
                         photo = currentPhoto,
                         baseUrl = baseUrl,
+                        onPhotoDeleted = { selectedPhotoIndex = null },
                         onDismiss = { showInfoSheet = false }
                     )
                 }
@@ -1483,13 +1614,22 @@ private fun TokenLoginCard(
     val scope = rememberCoroutineScope()
 
     val scanLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
+        com.journeyapps.barcodescanner.ScanContract()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            result.data?.getStringExtra("SCAN_RESULT")?.let { scanned ->
-                onTokenChange(scanned.trim().take(8).uppercase())
-                Toast.makeText(context, "QR scanned!", Toast.LENGTH_SHORT).show()
+        result.contents?.let { scanned ->
+            val raw = scanned.trim()
+            val extracted = try {
+                val uri = android.net.Uri.parse(raw)
+                if (uri.host != null) {
+                    uri.getQueryParameter("token")?.uppercase() ?: raw.uppercase()
+                } else {
+                    raw.uppercase()
+                }
+            } catch (_: Exception) {
+                raw.uppercase()
             }
+            onTokenChange(extracted.take(8))
+            Toast.makeText(context, "QR scanned!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1517,8 +1657,15 @@ private fun TokenLoginCard(
                 leadingIcon = { Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.primary) },
                 trailingIcon = {
                     IconButton(onClick = {
-                        val intent = android.content.Intent(context, QrScannerActivity::class.java)
-                        scanLauncher.launch(intent)
+                        val options = com.journeyapps.barcodescanner.ScanOptions().apply {
+                            setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
+                            setPrompt("Scan Chege Photos Token QR Code")
+                            setCameraId(0)
+                            setBeepEnabled(false)
+                            setBarcodeImageEnabled(false)
+                            setCaptureActivity(com.niccher.chege_photos_app.utils.PortraitCaptureActivity::class.java)
+                        }
+                        scanLauncher.launch(options)
                     }) {
                         Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR", tint = MaterialTheme.colorScheme.primary)
                     }
@@ -1648,10 +1795,20 @@ fun SyncScreen(repository: PhotoRepository) {
     var selectedIndices by remember { mutableStateOf(setOf<Int>()) }
     var failedItems by remember { mutableStateOf(listOf<Pair<com.niccher.chege_photos_app.repository.LocalPhoto, String>>()) }
 
+    var selectedFolder by remember { mutableStateOf("All") }
+
+    val folders = remember(photos) {
+        listOf("All") + photos.map { it.folderName }.distinct().sorted()
+    }
+
+    val filteredPhotos = remember(photos, selectedFolder) {
+        if (selectedFolder == "All") photos else photos.filter { it.folderName == selectedFolder }
+    }
+
     val targetPhotos = if (selectedIndices.isNotEmpty()) {
-        selectedIndices.sorted().map { photos[it] }
+        selectedIndices.sorted().map { filteredPhotos.getOrNull(it) }.filterNotNull()
     } else {
-        photos
+        filteredPhotos
     }
 
     val uploadBatch: (List<com.niccher.chege_photos_app.repository.LocalPhoto>, String) -> Unit = { batch, label ->
@@ -1689,19 +1846,19 @@ fun SyncScreen(repository: PhotoRepository) {
     Column {
         // ── Top action bar ─────────────────────────────────────────
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Button(
                 modifier = Modifier.weight(1f),
-                enabled = !isSyncing && photos.isNotEmpty(),
+                enabled = !isSyncing && filteredPhotos.isNotEmpty(),
                 onClick = {
                     uploadBatch(targetPhotos, if (selectedIndices.isNotEmpty()) "selected" else "local")
                 }
             ) {
                 val label = if (selectedIndices.isNotEmpty()) "Upload Selected (${selectedIndices.size})"
                             else if (isSyncing) "Syncing... ($processedCount/${targetPhotos.size})"
-                            else "Sync Now (${photos.size} local)"
+                            else "Sync Now (${filteredPhotos.size} local)"
                 Text(label)
             }
 
@@ -1721,6 +1878,26 @@ fun SyncScreen(repository: PhotoRepository) {
             }
         }
 
+        // Folder selection filter chips
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            folders.forEach { folder ->
+                FilterChip(
+                    selected = selectedFolder == folder,
+                    onClick = { 
+                        selectedFolder = folder
+                        selectedIndices = emptySet() // Reset selections when folder changes
+                    },
+                    label = { Text(folder) }
+                )
+            }
+        }
+
         if (failedItems.isNotEmpty() && !isSyncing) {
             Text(
                 text = "${failedItems.size} upload(s) failed. First error: ${failedItems.first().second.take(80)}",
@@ -1735,7 +1912,7 @@ fun SyncScreen(repository: PhotoRepository) {
             val overallProgress = if (targetPhotos.isNotEmpty()) (processedCount.toFloat() + currentFileProgress) / targetPhotos.size else 0f
             Column(modifier = Modifier.padding(vertical = 8.dp)) {
                 LinearProgressIndicator(
-                    progress = overallProgress,
+                    progress = { overallProgress },
                     modifier = Modifier.fillMaxWidth().height(8.dp),
                     color = MaterialTheme.colorScheme.primary,
                     strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
@@ -1754,7 +1931,7 @@ fun SyncScreen(repository: PhotoRepository) {
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(4.dp)
         ) {
-            itemsIndexed(photos) { index, photo ->
+            itemsIndexed(filteredPhotos) { index, photo ->
                 val isSelected = index in selectedIndices
                 Card(
                     modifier = Modifier
@@ -1785,6 +1962,23 @@ fun SyncScreen(repository: PhotoRepository) {
                                 .height(150.dp),
                             contentScale = ContentScale.Crop
                         )
+                        
+                        // Folder label tag overlay
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(4.dp),
+                            color = Color.Black.copy(alpha = 0.6f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = photo.folderName,
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                maxLines = 1
+                            )
+                        }
 
                         // Checkbox overlay when selected
                         if (isSelected) {
@@ -1832,7 +2026,7 @@ fun SyncScreen(repository: PhotoRepository) {
                     .fillMaxSize()
                     .background(Color.Black)
             ) {
-                val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { photos.size })
+                val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { filteredPhotos.size })
                 var showInfoSheet by remember { mutableStateOf(false) }
 
                 // Reset state on swipe
@@ -1844,55 +2038,95 @@ fun SyncScreen(repository: PhotoRepository) {
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
-                    val photo = photos[page]
-                    AsyncImage(
-                        model = photo.uri,
-                        contentDescription = photo.name,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
+                    val photo = filteredPhotos[page]
+                    var scale by remember { mutableStateOf(1f) }
+                    var offset by remember { mutableStateOf(Offset.Zero) }
+
+                    LaunchedEffect(pagerState.currentPage) {
+                        scale = 1f
+                        offset = Offset.Zero
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(scale) {
+                                detectTransformGesturesCustom(
+                                    onGesture = { centroid, pan, zoom, rotation ->
+                                        scale = (scale * zoom).coerceIn(1f, 5f)
+                                        if (scale > 1f) {
+                                            offset += pan
+                                        } else {
+                                            offset = Offset.Zero
+                                        }
+                                    },
+                                    consumeEnabled = scale > 1f
+                                )
+                            }
+                            .draggable(
+                                state = androidx.compose.foundation.gestures.rememberDraggableState { delta ->
+                                    if (scale == 1f) {
+                                        if (delta < -15f) { // Swipe up
+                                            showInfoSheet = true
+                                        } else if (delta > 15f) { // Swipe down
+                                            if (showInfoSheet) {
+                                                showInfoSheet = false
+                                            } else {
+                                                selectedPhotoIndex = null
+                                            }
+                                        }
+                                    }
+                                },
+                                orientation = androidx.compose.foundation.gestures.Orientation.Vertical
+                            )
+                    ) {
+                        val isVideo = photo.name.lowercase().endsWith(".mp4") ||
+                                      photo.name.lowercase().endsWith(".webm") ||
+                                      photo.name.lowercase().endsWith(".mkv")
+
+                        if (isVideo) {
+                            VideoPlayer(videoUrl = photo.uri.toString(), modifier = Modifier.fillMaxSize())
+                        } else {
+                            AsyncImage(
+                                model = photo.uri,
+                                contentDescription = photo.name,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer(
+                                        scaleX = scale,
+                                        scaleY = scale,
+                                        translationX = offset.x,
+                                        translationY = offset.y
+                                    ),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                    }
                 }
 
-                // Top-Right Controls
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.End
+                // Image Counter Overlay
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(bottom = 32.dp),
+                    contentAlignment = Alignment.BottomCenter
                 ) {
-                    val currentPhoto = photos[pagerState.currentPage]
-                    IconButton(
-                        onClick = {
-                            showUploadNotification(context, 1, 1)
-                            scope.launch {
-                                val result = repository.syncPhoto(currentPhoto)
-                                if (result is PhotoSyncResult.Success) {
-                                    sessionManager.updateLastUpload()
-                                    showUploadNotification(context, 1, 1, isFinished = true)
-                                    Toast.makeText(context, "Uploaded ${currentPhoto.name}", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    showUploadNotification(context, 1, 1, isFinished = true)
-                                    val errMsg = (result as? PhotoSyncResult.Error)?.message ?: "Unknown error"
-                                    Toast.makeText(context, "Upload failed: $errMsg", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Icon(Icons.Default.CloudUpload, contentDescription = "Upload", tint = Color.White)
-                    }
-                    IconButton(onClick = { showInfoSheet = true }) {
-                        Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White)
-                    }
-                    IconButton(onClick = { selectedPhotoIndex = null }) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                        Text(
+                            text = "${pagerState.currentPage + 1} of ${filteredPhotos.size}",
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
                 }
 
                 if (showInfoSheet) {
-                    val currentPhoto = photos[pagerState.currentPage]
+                    val currentPhoto = filteredPhotos[pagerState.currentPage]
                     val tempPhoto = Photo(
                         filename = currentPhoto.name,
-                        path = currentPhoto.file?.absolutePath ?: currentPhoto.uri.toString(),
+                        path = currentPhoto.uri.toString(),
                         size = currentPhoto.size.toString(),
                         taken_at = currentPhoto.file?.let { file ->
                             java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(file.lastModified()))
@@ -1905,26 +2139,9 @@ fun SyncScreen(repository: PhotoRepository) {
                     PhotoDetailsBottomSheet(
                         photo = tempPhoto,
                         localFile = currentPhoto.file,
+                        onPhotoDeleted = { selectedPhotoIndex = null },
                         onDismiss = { showInfoSheet = false }
                     )
-                }
-
-
-                // Info Overlay
-                val currentPhoto = photos[pagerState.currentPage]
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.6f))
-                        .padding(16.dp)
-                ) {
-                    Text(text = currentPhoto.name, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-                    Text(text = "Size: ${formatSize(currentPhoto.size)}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                    val date = currentPhoto.file?.let { file ->
-                        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(file.lastModified()))
-                    } ?: "Unknown"
-                    Text(text = "Date: $date", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -2625,6 +2842,7 @@ fun PhotoDetailsBottomSheet(
     photo: Photo,
     localFile: java.io.File? = null,
     baseUrl: String = "",
+    onPhotoDeleted: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState()
@@ -2711,6 +2929,40 @@ fun PhotoDetailsBottomSheet(
         }
     }
 
+    val scope = rememberCoroutineScope()
+    var isFavoriteState by remember(photo.is_favorite) { mutableStateOf(photo.is_favorite == "1" || photo.is_favorite == "true") }
+    var showLocalAlbumPicker by remember { mutableStateOf(false) }
+    var albumsList by remember { mutableStateOf(listOf<com.niccher.chege_photos_app.models.Album>()) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val resp = ApiClient.getPhotoService(context).getAlbums()
+            if (resp.isSuccessful) {
+                albumsList = resp.body()?.albums ?: emptyList()
+            }
+        } catch (_: Exception) {}
+    }
+
+    if (showLocalAlbumPicker) {
+        AlbumPickerDialog(
+            albums = albumsList,
+            selectedCount = 1,
+            onAlbumSelected = { album ->
+                showLocalAlbumPicker = false
+                scope.launch {
+                    val repository = PhotoRepository(context)
+                    val ok = repository.addPhotoToAlbum(album.id ?: "", photo.id ?: "")
+                    if (ok) {
+                        Toast.makeText(context, "Added to ${album.name}", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Failed to add to album", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onDismiss = { showLocalAlbumPicker = false }
+        )
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -2730,6 +2982,154 @@ fun PhotoDetailsBottomSheet(
                 color = MaterialTheme.colorScheme.primary
             )
             
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Action Buttons Row
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (localFile != null) {
+                    // Local photo: display Upload to Server action
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable {
+                            showUploadNotification(context, 1, 1)
+                            scope.launch {
+                                val uri = Uri.parse(photo.path)
+                                val localPhoto = com.niccher.chege_photos_app.repository.LocalPhoto(
+                                    uri = uri,
+                                    file = localFile,
+                                    name = photo.filename,
+                                    size = photo.size?.toLongOrNull() ?: 0L
+                                )
+                                val repository = PhotoRepository(context)
+                                val result = repository.syncPhoto(localPhoto)
+                                if (result is PhotoSyncResult.Success) {
+                                    SessionManager(context).updateLastUpload()
+                                    showUploadNotification(context, 1, 1, isFinished = true)
+                                    Toast.makeText(context, "Uploaded successfully!", Toast.LENGTH_SHORT).show()
+                                    onDismiss()
+                                    onPhotoDeleted?.invoke()
+                                } else {
+                                    showUploadNotification(context, 1, 1, isFinished = true)
+                                    val errMsg = (result as? PhotoSyncResult.Error)?.message ?: "Unknown error"
+                                    Toast.makeText(context, "Upload failed: $errMsg", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudUpload,
+                            contentDescription = "Upload",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Upload", style = MaterialTheme.typography.labelSmall)
+                    }
+                } else {
+                    // Favorite Button
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable {
+                            scope.launch {
+                                try {
+                                    val pid = photo.id ?: return@launch
+                                    val resp = ApiClient.getPhotoService(context).favoritePhoto(pid)
+                                    if (resp.isSuccessful) {
+                                        isFavoriteState = !isFavoriteState
+                                        val db = com.niccher.chege_photos_app.data.AppDatabase.getDatabase(context)
+                                        val cached = db.photoDao().getPhotoById(photo.id ?: "")
+                                        if (cached != null) {
+                                            db.photoDao().insertPhotos(listOf(cached.copy(is_favorite = if (isFavoriteState) 1 else 0)))
+                                        }
+                                        Toast.makeText(context, if (isFavoriteState) "Added to Favorites" else "Removed from Favorites", Toast.LENGTH_SHORT).show()
+                                        // Trigger gallery refresh to show updated state
+                                        PhotoRepository(context).photosRefreshTrigger.tryEmit(Unit)
+                                    }
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = if (isFavoriteState) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = "Favorite",
+                            tint = if (isFavoriteState) Color.Red else MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Favorite", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    // Add to Album Button
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { showLocalAlbumPicker = true }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = "Add to Album"
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Add to Album", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    // Download Button
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable {
+                            scope.launch {
+                                downloadRemotePhoto(context, baseUrl, photo)?.let {
+                                    Toast.makeText(context, "Downloaded to Gallery", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = "Download"
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Download", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    // Delete Button
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable {
+                            scope.launch {
+                                try {
+                                    val pid = photo.id ?: return@launch
+                                    val resp = ApiClient.getPhotoService(context).deletePhoto(pid)
+                                    if (resp.isSuccessful) {
+                                        val db = com.niccher.chege_photos_app.data.AppDatabase.getDatabase(context)
+                                        val photoId = photo.id
+                                        if (photoId != null) {
+                                            db.photoDao().deleteById(photoId)
+                                        }
+                                        Toast.makeText(context, "Photo moved to Trash", Toast.LENGTH_SHORT).show()
+                                        onDismiss()
+                                        onPhotoDeleted?.invoke()
+                                    }
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = Color.Red
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Delete", style = MaterialTheme.typography.labelSmall, color = Color.Red)
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
 
             // Basic Info Section
@@ -2797,8 +3197,16 @@ fun PhotoDetailsBottomSheet(
                                             .background(Color(0xFF333333)),
                                         contentAlignment = Alignment.Center
                                     ) {
+                                        val imageModel = remember(photo, baseUrl) {
+                                            val p = photo.path
+                                            if (p.startsWith("/") || p.startsWith("content:")) {
+                                                p
+                                            } else {
+                                                baseUrl.trimEnd('/') + "/" + p.trimStart('/')
+                                            }
+                                        }
                                         AsyncImage(
-                                            model = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/'),
+                                            model = imageModel,
                                             contentDescription = "Face",
                                             modifier = Modifier
                                                 .size(80.dp)
@@ -3435,7 +3843,11 @@ fun FaceSearchScreen(baseUrl: String) {
                         ) {
                             if (person.thumbnail != null) {
                                 val thumb = person.thumbnail
-                                val imgUrl = baseUrl.trimEnd('/') + "/" + (thumb.thumbnail_path ?: thumb.path).trimStart('/')
+                                val imgUrl = if (thumb.thumbnail_path?.startsWith("/") == true || thumb.thumbnail_path?.startsWith("content:") == true || thumb.path.startsWith("/") || thumb.path.startsWith("content:")) {
+                                    thumb.thumbnail_path ?: thumb.path
+                                } else {
+                                    baseUrl.trimEnd('/') + "/" + (thumb.thumbnail_path ?: thumb.path).trimStart('/')
+                                }
                                 AsyncImage(
                                     model = imgUrl,
                                     contentDescription = person.name,
@@ -3520,8 +3932,16 @@ fun PersonPhotosScreen(
                         modifier = Modifier.fillMaxWidth().aspectRatio(1f),
                         onClick = { selectedPhotoIndex = index }
                     ) {
+                        val imageModel = remember(photo, baseUrl) {
+                            val p = photo.thumbnail_path ?: photo.path
+                            if (p.startsWith("/") || p.startsWith("content:")) {
+                                p
+                            } else {
+                                baseUrl.trimEnd('/') + "/" + p.trimStart('/')
+                            }
+                        }
                         AsyncImage(
-                            model = baseUrl.trimEnd('/') + "/" + (photo.thumbnail_path ?: photo.path).trimStart('/'),
+                            model = imageModel,
                             contentDescription = photo.filename,
                             imageLoader = coilImageLoader,
                             modifier = Modifier.fillMaxSize(),
@@ -3616,8 +4036,16 @@ fun PersonPhotoPager(
                             }
                         }
                 ) {
+                    val imageModel = remember(photo, baseUrl) {
+                        val p = photo.path
+                        if (p.startsWith("/") || p.startsWith("content:")) {
+                            p
+                        } else {
+                            baseUrl.trimEnd('/') + "/" + p.trimStart('/')
+                        }
+                    }
                     AsyncImage(
-                        model = baseUrl.trimEnd('/') + "/" + photo.path.trimStart('/'),
+                        model = imageModel,
                         contentDescription = photo.filename,
                         imageLoader = coilImageLoader,
                         modifier = Modifier
@@ -3658,6 +4086,24 @@ fun PersonPhotoPager(
                     }
                 }
             }
+            
+            // Image Counter Overlay
+            Box(
+                modifier = Modifier.fillMaxSize().padding(bottom = 32.dp),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        text = "${pagerState.currentPage + 1} of ${photos.size}",
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
 
             // Close button
             IconButton(
@@ -3694,4 +4140,99 @@ fun PersonPhotoPager(
             )
         }
     }
+}
+
+suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTransformGesturesCustom(
+    onGesture: (centroid: androidx.compose.ui.geometry.Offset, pan: androidx.compose.ui.geometry.Offset, zoom: Float, rotation: Float) -> Unit,
+    consumeEnabled: Boolean
+) {
+    awaitPointerEventScope {
+        var rotation = 0f
+        var zoom = 1f
+        var pan = androidx.compose.ui.geometry.Offset.Zero
+        var pastTouchSlop = false
+        val touchSlop = viewConfiguration.touchSlop
+
+        while (true) {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            var active = true
+            rotation = 0f
+            zoom = 1f
+            pan = androidx.compose.ui.geometry.Offset.Zero
+            pastTouchSlop = false
+            
+            do {
+                val event = awaitPointerEvent()
+                val canceled = event.changes.any { it.isConsumed }
+                if (!canceled) {
+                    val zoomChange = event.calculateZoom()
+                    val rotationChange = event.calculateRotation()
+                    val panChange = event.calculatePan()
+
+                    if (!pastTouchSlop) {
+                        zoom *= zoomChange
+                        rotation += rotationChange
+                        pan += panChange
+
+                        val centroidSize = event.calculateCentroidSize(useCurrent = false)
+                        val zoomMotion = java.lang.Math.abs(1 - zoom) * centroidSize
+                        val panMotion = pan.getDistance()
+
+                        if (zoomMotion > touchSlop || (consumeEnabled && panMotion > touchSlop) || event.changes.size > 1) {
+                            pastTouchSlop = true
+                        }
+                    }
+
+                    if (pastTouchSlop) {
+                        val centroid = event.calculateCentroid(useCurrent = false)
+                        if (zoomChange != 1f || panChange != androidx.compose.ui.geometry.Offset.Zero) {
+                            onGesture(centroid, panChange, zoomChange, rotationChange)
+                        }
+                        if (consumeEnabled || event.changes.size > 1) {
+                            event.changes.forEach {
+                                if (it.positionChanged()) {
+                                    it.consume()
+                                }
+                            }
+                        }
+                    }
+                }
+                active = event.changes.any { it.pressed }
+            } while (active)
+        }
+    }
+}
+
+@Composable
+fun VideoPlayer(
+    videoUrl: String,
+    modifier: Modifier = Modifier
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val exoPlayer = remember(videoUrl) {
+        androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
+            val mediaItem = androidx.media3.common.MediaItem.fromUri(videoUrl)
+            setMediaItem(mediaItem)
+            prepare()
+            playWhenReady = false
+        }
+    }
+
+    DisposableEffect(videoUrl) {
+        onDispose {
+            exoPlayer.release()
+        }
+    }
+
+    androidx.compose.ui.viewinterop.AndroidView(
+        factory = { ctx ->
+            androidx.media3.ui.PlayerView(ctx).apply {
+                player = exoPlayer
+                useController = true
+                setShowNextButton(false)
+                setShowPreviousButton(false)
+            }
+        },
+        modifier = modifier.fillMaxSize()
+    )
 }
