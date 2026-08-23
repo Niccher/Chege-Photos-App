@@ -63,6 +63,31 @@ object DeviceFingerprint {
         }
     }
 
+    fun getOsVersion(): String {
+        return "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+    }
+
+    fun getScreenMetrics(context: Context): String {
+        return try {
+            val dm = context.resources.displayMetrics
+            "${dm.widthPixels}x${dm.heightPixels} (${dm.densityDpi}dpi)"
+        } catch (_: Exception) {
+            "unknown"
+        }
+    }
+
+    fun getLocale(): String {
+        return java.util.Locale.getDefault().toString()
+    }
+
+    fun getTimezone(): String {
+        return java.util.TimeZone.getDefault().id
+    }
+
+    fun getKernelVersion(): String {
+        return System.getProperty("os.version") ?: "unknown"
+    }
+
     fun init(context: Context) {
         getDeviceId(context)
         getFingerprint()

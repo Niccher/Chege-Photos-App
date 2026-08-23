@@ -101,8 +101,21 @@ class SessionManager(context: Context) {
         prefs.edit().putBoolean("backup_only_charging", onlyCharging).apply()
     }
 
+    fun getDeviceUuid(): String {
+        var uuid = prefs.getString("device_uuid", null)
+        if (uuid == null) {
+            uuid = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString("device_uuid", uuid).apply()
+        }
+        return uuid
+    }
+
     fun clearSession() {
+        val uuid = prefs.getString("device_uuid", null)
         prefs.edit().clear().apply()
+        if (uuid != null) {
+            prefs.edit().putString("device_uuid", uuid).apply()
+        }
     }
 
     fun isLoggedIn(): Boolean {

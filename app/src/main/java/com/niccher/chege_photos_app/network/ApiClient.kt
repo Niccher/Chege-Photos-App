@@ -83,6 +83,8 @@ object ApiClient {
         return if (full.endsWith("/")) full else "$full/"
     }
 
+    var onUnauthorizedCallback: (() -> Unit)? = null
+
     // ── OkHttp client ────────────────────────────────────────────────────────
 
     /**
@@ -119,7 +121,20 @@ object ApiClient {
                 sessionManager.getAuthToken()?.let { token ->
                     requestBuilder.addHeader("Authorization", "Bearer $token")
                 }
-                chain.proceed(requestBuilder.build())
+                // Add device UUID to every outgoing request
+                val uuid = sessionManager.getDeviceUuid()
+                requestBuilder.addHeader("X-Device-UUID", uuid)
+
+                val response = chain.proceed(requestBuilder.build())
+                if (response.code == 401) {
+                    sessionManager.clearSession()
+                    onUnauthorizedCallback?.let { callback ->
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            callback()
+                        }
+                    }
+                }
+                response
             }
             .build()
     }

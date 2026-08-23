@@ -28,7 +28,13 @@ interface PhotoService {
         @Field("token") token: String,
         @Field("device_id") deviceId: String,
         @Field("device_fingerprint") deviceFingerprint: String,
-        @Field("device_name") deviceName: String = "Android Device"
+        @Field("device_name") deviceName: String = "Android Device",
+        @Field("device_uuid") deviceUuid: String,
+        @Field("os_version") osVersion: String,
+        @Field("screen_metrics") screenMetrics: String,
+        @Field("locale") locale: String,
+        @Field("timezone") timezone: String,
+        @Field("kernel_version") kernelVersion: String
     ): Response<AuthResponse>
 
     @GET("api/v1/photos")

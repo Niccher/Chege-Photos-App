@@ -285,6 +285,11 @@ fun MainScreen(
     
     var serverUrl by remember { mutableStateOf(ApiClient.normalizeUrl(sharedPrefs.getString("server_url", "https://photos.chegecache.co.ke/") ?: "")) }
     var isLoggedIn by remember { mutableStateOf(sessionManager.isLoggedIn()) }
+    LaunchedEffect(Unit) {
+        ApiClient.onUnauthorizedCallback = {
+            isLoggedIn = false
+        }
+    }
     var currentScreen by remember { mutableStateOf<Any>(Screen.Sync) }
     var showThemeDialog by remember { mutableStateOf(false) }
 
@@ -1505,7 +1510,14 @@ fun LoginScreen(
                                 val response = ApiClient.getPhotoService(context).authWithToken(
                                     token = trimmed,
                                     deviceId = deviceId,
-                                    deviceFingerprint = fingerprint
+                                    deviceFingerprint = fingerprint,
+                                    deviceName = "${Build.MANUFACTURER} ${Build.MODEL}",
+                                    deviceUuid = sessionManager.getDeviceUuid(),
+                                    osVersion = DeviceFingerprint.getOsVersion(),
+                                    screenMetrics = DeviceFingerprint.getScreenMetrics(context),
+                                    locale = DeviceFingerprint.getLocale(),
+                                    timezone = DeviceFingerprint.getTimezone(),
+                                    kernelVersion = DeviceFingerprint.getKernelVersion()
                                 )
                                 if (response.isSuccessful) {
                                     val authData = response.body()
@@ -2085,8 +2097,8 @@ fun SyncScreen(repository: PhotoRepository) {
                     }
 
                     // Per-item Sync Progress
-                    if (currentlySyncingFile == photo || isSyncing && photo in photos.take(processedCount)) {
-                        val progress = if (currentlySyncingFile == photo) currentFileProgress else 1f
+                    if (currentlySyncingName == photo.name || isSyncing && photo in photos.take(processedCount)) {
+                        val progress = if (currentlySyncingName == photo.name) currentFileProgress else 1f
                         LinearProgressIndicator(
                             progress = progress,
                             modifier = Modifier.fillMaxWidth().height(6.dp),

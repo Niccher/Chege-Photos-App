@@ -104,6 +104,9 @@ The app communicates with the web backend via Retrofit 2 (with kotlinx.serializa
 ### Authentication & Security
 - **Email/password login** — Standard credential login via `POST /api/login`. A default superuser profile is seeded automatically for administrative overrides (`superadmin@eavesdroid.com` / `SuperAdmin@2024!`).
 - **Token login** — 8-character auth token (from web settings) + device fingerprint via `POST /api/auth-with-token`
+- **Device UUID & Headers** — Unique device UUID generation persisted across sessions, sent as `X-Device-UUID` header on API requests.
+- **Rich Metadata Sync** — Sends OS version, screen size/density metrics, user locale, system timezone, and kernel version on token authentication.
+- **Automatic Session Revocation** — Intercepts `401 Unauthorized` responses via OkHttp interceptor to automatically clear invalid sessions and redirect to login.
 - **QR scan** — Scan the QR code from the web app's token page using CameraX + ML Kit barcode scanner
 - **Biometric unlock** — Optional biometric gate on app launch using AndroidX Biometric
 - **Device fingerprinting** — SHA-256 of ~20 Build fields for device identification
