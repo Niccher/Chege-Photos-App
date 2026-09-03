@@ -201,11 +201,12 @@ class MainActivity : FragmentActivity() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "File Transfers"
-            val descriptionText = "Notifications for photo uploads and downloads"
-            val importance = NotificationManager.IMPORTANCE_LOW
-            val channel = NotificationChannel("file_transfer_channel", name, importance).apply {
+            val name = "Photo Sync"
+            val descriptionText = "Live notifications for photo uploads and background sync"
+            val importance = NotificationManager.IMPORTANCE_DEFAULT
+            val channel = NotificationChannel("chege_photos_sync_v2", name, importance).apply {
                 description = descriptionText
+                setShowBadge(true)
             }
             val notificationManager: NotificationManager =
                 getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -2262,10 +2263,19 @@ fun SyncScreen(repository: PhotoRepository) {
                 val output = workInfo.outputData
                 val succeeded = output.getInt("succeeded", 0)
                 val total = output.getInt("total", 0)
-                Toast.makeText(context, "Synced $succeeded out of $total photos", Toast.LENGTH_SHORT).show()
+                val failed = output.getInt("failed", (total - succeeded).coerceAtLeast(0))
+                if (failed > 0) {
+                    Toast.makeText(context, "Uploaded $succeeded of $total photos ($failed unable to upload)", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "Synced all $succeeded photos successfully!", Toast.LENGTH_SHORT).show()
+                }
                 selectedIndices = emptySet()
             } else if (workInfo.state == androidx.work.WorkInfo.State.FAILED) {
-                Toast.makeText(context, "Upload failed or cancelled", Toast.LENGTH_SHORT).show()
+                val output = workInfo.outputData
+                val succeeded = output.getInt("succeeded", 0)
+                val total = output.getInt("total", 0)
+                val failed = (total - succeeded).coerceAtLeast(0)
+                Toast.makeText(context, "Sync ended: $succeeded uploaded, $failed unable to upload", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -2287,7 +2297,11 @@ fun SyncScreen(repository: PhotoRepository) {
     }
 
     val uploadBatch: (List<com.niccher.chege_photos_app.repository.LocalPhoto>, String) -> Unit = { batch, label ->
-        com.niccher.chege_photos_app.utils.ManualUploadWorker.enqueue(context, batch)
+        com.niccher.chege_photos_app.utils.ManualUploadWorker.enqueue(
+            context = context,
+            photos = batch,
+            bucketName = if (selectedIndices.isNotEmpty()) "Selected (${batch.size})" else selectedFolder
+        )
     }
 
     PullToRefreshBox(
@@ -2311,23 +2325,13 @@ fun SyncScreen(repository: PhotoRepository) {
                 modifier = Modifier.weight(1f),
                 enabled = !isSyncing && filteredPhotos.isNotEmpty(),
                 onClick = {
-                    if (selectedIndices.isEmpty()) {
-                        val syncRequest = androidx.work.OneTimeWorkRequestBuilder<com.niccher.chege_photos_app.utils.SyncWorker>()
-                            .build()
-                        workManager.enqueueUniqueWork(
-                            "ChegePhotosSync",
-                            androidx.work.ExistingWorkPolicy.KEEP,
-                            syncRequest
-                        )
-                        android.widget.Toast.makeText(context, "Background sync started for ${filteredPhotos.size} photos...", android.widget.Toast.LENGTH_SHORT).show()
-                    } else {
-                        uploadBatch(targetPhotos, "selected")
-                    }
+                    uploadBatch(targetPhotos, if (selectedIndices.isNotEmpty()) "selected" else "folder_${selectedFolder}")
                 }
             ) {
                 val label = if (selectedIndices.isNotEmpty()) "Upload Selected (${selectedIndices.size})"
-                            else if (isSyncing) "Syncing... ($processedCount/${targetPhotos.size})"
-                            else "Sync Now (${filteredPhotos.size} local)"
+                            else if (isSyncing) "Syncing $selectedFolder... ($processedCount/${targetPhotos.size})"
+                            else if (selectedFolder != "All") "Sync $selectedFolder (${filteredPhotos.size})"
+                            else "Sync All (${filteredPhotos.size})"
                 Text(label)
             }
 
@@ -2943,47 +2947,87 @@ private suspend fun downloadRemotePhoto(context: Context, baseUrl: String, photo
     }
 }
 
+fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val kb = bytes / 1024.0
+    val mb = kb / 1024.0
+    val gb = mb / 1024.0
+    return when {
+        gb >= 1.0 -> String.format(java.util.Locale.US, "%.2f GB", gb)
+        mb >= 1.0 -> String.format(java.util.Locale.US, "%.1f MB", mb)
+        kb >= 1.0 -> String.format(java.util.Locale.US, "%.1f KB", kb)
+        else -> "$bytes B"
+    }
+}
+
 fun showUploadNotification(
     context: Context,
     current: Int,
     total: Int,
+    uploadedBytes: Long = 0L,
+    totalBytes: Long = 0L,
     isFinished: Boolean = false,
-    currentFileName: String? = null
+    failedCount: Int = 0,
+    currentFileName: String? = null,
+    bucketName: String? = null
 ) {
-    val channelId = "file_transfer_channel"
+    val channelId = "chege_photos_sync_v2"
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         val systemNotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         if (systemNotificationManager != null && systemNotificationManager.getNotificationChannel(channelId) == null) {
             val channel = NotificationChannel(
                 channelId,
-                "File Transfers",
-                NotificationManager.IMPORTANCE_LOW
+                "Photo Sync",
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "Notifications for photo uploads and background sync"
-                setShowBadge(false)
+                description = "Live notifications for photo uploads and background sync"
+                setShowBadge(true)
             }
             systemNotificationManager.createNotificationChannel(channel)
         }
     }
 
     val notificationManager = NotificationManagerCompat.from(context)
-    val percentage = if (total > 0) ((current.toFloat() / total) * 100).toInt() else 0
+    val percentage = if (totalBytes > 0) {
+        ((uploadedBytes.toDouble() / totalBytes) * 100).toInt().coerceIn(0, 100)
+    } else if (total > 0) {
+        ((current.toDouble() / total) * 100).toInt().coerceIn(0, 100)
+    } else 0
+
     val builder = NotificationCompat.Builder(context, channelId)
         .setSmallIcon(R.drawable.ic_sync_notification)
-        .setContentTitle(if (isFinished) "Sync Complete" else "Uploading $current of $total")
-        .setSubText(if (isFinished) "Complete" else "$percentage%")
-        .setPriority(NotificationCompat.PRIORITY_LOW)
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .setOngoing(!isFinished)
         .setOnlyAlertOnce(true)
 
+    val targetLabel = if (!bucketName.isNullOrBlank() && bucketName != "All") bucketName else "Photos"
+
     if (isFinished) {
-        builder.setContentText("Successfully synced $total items to server")
-            .setProgress(0, 0, false)
+        val totalSizeStr = if (uploadedBytes > 0) " (${formatFileSize(uploadedBytes)})" else ""
+        if (failedCount > 0) {
+            builder.setContentTitle("Sync Incomplete • $targetLabel")
+                .setContentText("Uploaded $current of $total photos ($failedCount unable to upload)$totalSizeStr")
+                .setSubText("$failedCount unable to upload")
+        } else {
+            builder.setContentTitle("Sync Complete • $targetLabel")
+                .setContentText("Successfully uploaded all $current photos$totalSizeStr")
+                .setSubText("Done")
+        }
+        builder.setProgress(0, 0, false)
             .setAutoCancel(true)
     } else {
+        val bytesInfo = if (totalBytes > 0) {
+            val remainingBytes = (totalBytes - uploadedBytes).coerceAtLeast(0L)
+            "${formatFileSize(uploadedBytes)} of ${formatFileSize(totalBytes)} (${formatFileSize(remainingBytes)} left)"
+        } else {
+            "$percentage%"
+        }
         val fileDetail = if (!currentFileName.isNullOrBlank()) " • $currentFileName" else ""
-        builder.setContentText("Uploading $current of $total items ($percentage%)$fileDetail")
-            .setProgress(total, current, false)
+        
+        builder.setContentTitle("Syncing $targetLabel ($current of $total)")
+            .setContentText("$bytesInfo$fileDetail")
+            .setSubText("$percentage%")
+            .setProgress(100, percentage, false)
     }
 
     try {
@@ -3106,7 +3150,8 @@ fun SharedUploadDialog(
                             com.niccher.chege_photos_app.utils.ManualUploadWorker.enqueue(
                                 context = context,
                                 photos = localPhotos,
-                                albumId = selectedAlbum?.id
+                                albumId = selectedAlbum?.id,
+                                bucketName = selectedAlbum?.name ?: "Album Upload"
                             )
                         }
                     ) {
@@ -3600,25 +3645,51 @@ fun PhotoDetailsBottomSheet(
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.clickable {
-                            showUploadNotification(context, 1, 1, isFinished = false, currentFileName = photo.filename)
+                            val fileSize = localFile.length()
+                            showUploadNotification(
+                                context = context,
+                                current = 1,
+                                total = 1,
+                                uploadedBytes = 0L,
+                                totalBytes = fileSize,
+                                isFinished = false,
+                                currentFileName = photo.filename,
+                                bucketName = "Photo"
+                            )
                             scope.launch {
                                 val uri = Uri.parse(photo.path)
                                 val localPhoto = com.niccher.chege_photos_app.repository.LocalPhoto(
                                     uri = uri,
                                     file = localFile,
                                     name = photo.filename,
-                                    size = photo.size?.toLongOrNull() ?: 0L
+                                    size = fileSize
                                 )
                                 val repository = PhotoRepository(context)
                                 val result = repository.syncPhoto(localPhoto)
                                 if (result is PhotoSyncResult.Success) {
                                     SessionManager(context).updateLastUpload()
-                                    showUploadNotification(context, 1, 1, isFinished = true)
+                                    showUploadNotification(
+                                        context = context,
+                                        current = 1,
+                                        total = 1,
+                                        uploadedBytes = fileSize,
+                                        totalBytes = fileSize,
+                                        isFinished = true,
+                                        bucketName = "Photo"
+                                    )
                                     Toast.makeText(context, "Uploaded successfully!", Toast.LENGTH_SHORT).show()
                                     onDismiss()
                                     onPhotoDeleted?.invoke()
                                 } else {
-                                    showUploadNotification(context, 1, 1, isFinished = true)
+                                    showUploadNotification(
+                                        context = context,
+                                        current = 0,
+                                        total = 1,
+                                        uploadedBytes = 0L,
+                                        totalBytes = fileSize,
+                                        isFinished = true,
+                                        bucketName = "Photo"
+                                    )
                                     val errMsg = (result as? PhotoSyncResult.Error)?.message ?: "Unknown error"
                                     Toast.makeText(context, "Upload failed: $errMsg", Toast.LENGTH_LONG).show()
                                 }

@@ -55,24 +55,15 @@ class PhotoRepository(private val context: Context) {
 
     suspend fun isServerReachable(): Boolean = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
-        if (now - lastServerCheckFailureTime < REACHABILITY_RECHECK_WINDOW_MS) {
-            return@withContext false
-        }
-        if (now - lastServerCheckSuccessTime < 30_000L) {
+        if (now - lastServerCheckSuccessTime < 60_000L) {
             return@withContext true
         }
 
         try {
             val response = ApiClient.getPhotoService(context).ping()
-            if (response.isSuccessful) {
-                lastServerCheckSuccessTime = System.currentTimeMillis()
-                true
-            } else {
-                lastServerCheckFailureTime = System.currentTimeMillis()
-                false
-            }
+            lastServerCheckSuccessTime = System.currentTimeMillis()
+            true
         } catch (_: Exception) {
-            lastServerCheckFailureTime = System.currentTimeMillis()
             false
         }
     }
@@ -119,7 +110,7 @@ class PhotoRepository(private val context: Context) {
                 var folder = "Other"
                 if (bucketCol >= 0) {
                     val rawFolder = it.getString(bucketCol)
-                    if (rawFolder != null) {
+                    if (!rawFolder.isNullOrBlank()) {
                         folder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                             rawFolder
                         } else {
@@ -127,6 +118,12 @@ class PhotoRepository(private val context: Context) {
                             val file = File(rawFolder)
                             file.parentFile?.name ?: "Other"
                         }
+                    }
+                }
+                if ((folder == "Other" || folder.isBlank()) && path != null) {
+                    val parentName = File(path).parentFile?.name
+                    if (!parentName.isNullOrBlank()) {
+                        folder = parentName
                     }
                 }
 

@@ -100,6 +100,19 @@ object ApiClient {
                         }
                     }
                 }
+                val body = response.body
+                val contentType = body?.contentType()
+                if (response.isSuccessful && body != null && contentType != null && contentType.subtype.contains("json")) {
+                    val rawString = body.string()
+                    val cleanedString = if (rawString.contains("}{")) {
+                        val lastBrace = rawString.lastIndexOf('{')
+                        if (lastBrace > 0) rawString.substring(lastBrace) else rawString
+                    } else {
+                        rawString
+                    }
+                    val newBody = okhttp3.ResponseBody.create(contentType, cleanedString)
+                    return@addInterceptor response.newBuilder().body(newBody).build()
+                }
                 response
             }
 

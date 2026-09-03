@@ -31,37 +31,97 @@ class SyncWorker(
         return try {
             val localPhotos = repository.getLocalPhotos()
             val total = localPhotos.size
-            Log.d("SyncWorker", "Found $total local photos to sync.")
+            val totalBytes = localPhotos.sumOf { it.size }
+            Log.d("SyncWorker", "Found $total local photos ($totalBytes bytes) to sync.")
             
             if (total == 0) {
                 return Result.success()
             }
 
-            showUploadNotification(context, 0, total)
-            
             var successCount = 0
+            var uploadedBytes = 0L
+
+            showUploadNotification(
+                context = context,
+                current = 0,
+                total = total,
+                uploadedBytes = 0L,
+                totalBytes = totalBytes,
+                isFinished = false,
+                currentFileName = null,
+                bucketName = "All"
+            )
+            
             for ((index, photo) in localPhotos.withIndex()) {
                 if (isStopped) {
                     Log.d("SyncWorker", "Sync worker was cancelled.")
-                    showUploadNotification(context, successCount, total, isFinished = true)
+                    showUploadNotification(
+                        context = context,
+                        current = successCount,
+                        total = total,
+                        uploadedBytes = uploadedBytes,
+                        totalBytes = totalBytes,
+                        isFinished = true,
+                        bucketName = "All"
+                    )
                     return Result.failure()
                 }
 
-                showUploadNotification(context, index + 1, total, isFinished = false, currentFileName = photo.name)
+                val photoSize = photo.size
+                showUploadNotification(
+                    context = context,
+                    current = index + 1,
+                    total = total,
+                    uploadedBytes = uploadedBytes,
+                    totalBytes = totalBytes,
+                    isFinished = false,
+                    currentFileName = photo.name,
+                    bucketName = "All"
+                )
 
                 // SyncPhoto already calculates and checks the SHA-256 hash before uploading
-                val syncResult = repository.syncPhoto(photo)
+                val syncResult = repository.syncPhoto(photo) { progress ->
+                    val inProgressBytes = (photoSize * progress).toLong()
+                    val liveBytes = uploadedBytes + inProgressBytes
+                    showUploadNotification(
+                        context = context,
+                        current = index + 1,
+                        total = total,
+                        uploadedBytes = liveBytes,
+                        totalBytes = totalBytes,
+                        isFinished = false,
+                        currentFileName = photo.name,
+                        bucketName = "All"
+                    )
+                }
                 if (syncResult is PhotoSyncResult.Success) {
                     successCount++
+                    uploadedBytes += photoSize
                     sessionManager.updateLastUpload()
                 } else if (syncResult is PhotoSyncResult.Error && syncResult.message.contains("Server unreachable", ignoreCase = true)) {
                     Log.w("SyncWorker", "Connection lost mid-sync. Pausing batch.")
-                    showUploadNotification(context, successCount, total, isFinished = true)
+                    showUploadNotification(
+                        context = context,
+                        current = successCount,
+                        total = total,
+                        uploadedBytes = uploadedBytes,
+                        totalBytes = totalBytes,
+                        isFinished = true,
+                        bucketName = "All"
+                    )
                     return Result.retry()
                 }
             }
             
-            showUploadNotification(context, successCount, total, isFinished = true)
+            showUploadNotification(
+                context = context,
+                current = successCount,
+                total = total,
+                uploadedBytes = uploadedBytes,
+                totalBytes = totalBytes,
+                isFinished = true,
+                bucketName = "All"
+            )
             Log.d("SyncWorker", "Successfully synced $successCount photos.")
             Result.success()
         } catch (e: Exception) {
