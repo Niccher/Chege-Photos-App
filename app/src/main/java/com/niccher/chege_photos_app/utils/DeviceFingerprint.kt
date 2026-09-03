@@ -18,6 +18,17 @@ object DeviceFingerprint {
         return _deviceId!!
     }
 
+    /**
+     * Deterministic composite device key combining Android ID and device hardware.
+     * Persists across app uninstalls/reinstalls for the same app signing key.
+     */
+    fun getCompositeDeviceKey(context: Context): String {
+        val androidId = getDeviceId(context)
+        val raw = "$androidId:${Build.MANUFACTURER}:${Build.MODEL}"
+        val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
     fun getFingerprint(): String {
         if (_fingerprint == null) {
             val parts = listOf(

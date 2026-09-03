@@ -3,7 +3,7 @@ package com.niccher.chege_photos_app.utils
 import android.content.Context
 import android.content.SharedPreferences
 
-class SessionManager(context: Context) {
+class SessionManager(private val context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
     companion object {
@@ -17,6 +17,10 @@ class SessionManager(context: Context) {
         private const val KEY_LAST_UPLOAD = "last_upload"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
         private const val KEY_APP_THEME = "app_theme"
+        private const val KEY_CONFIG_MAX_UPLOAD_MB = "cfg_max_upload_mb"
+        private const val KEY_CONFIG_ALLOWED_EXTS = "cfg_allowed_exts"
+        private const val KEY_CONFIG_APP_NAME = "cfg_app_name"
+        private const val KEY_CONFIG_PHOTO_EDITING = "cfg_photo_editing"
     }
 
     fun saveTheme(theme: String) {
@@ -101,10 +105,36 @@ class SessionManager(context: Context) {
         prefs.edit().putBoolean("backup_only_charging", onlyCharging).apply()
     }
 
+    fun saveServerConfig(config: com.niccher.chege_photos_app.models.ServerConfigData) {
+        prefs.edit()
+            .putInt(KEY_CONFIG_MAX_UPLOAD_MB, config.max_upload_size_mb)
+            .putString(KEY_CONFIG_ALLOWED_EXTS, config.allowed_extensions)
+            .putString(KEY_CONFIG_APP_NAME, config.app_name ?: "Chege Photos")
+            .putBoolean(KEY_CONFIG_PHOTO_EDITING, config.capabilities?.photo_editing ?: false)
+            .apply()
+    }
+
+    fun getMaxUploadSizeMb(): Int {
+        return prefs.getInt(KEY_CONFIG_MAX_UPLOAD_MB, 500)
+    }
+
+    fun getAllowedExtensions(): List<String> {
+        val raw = prefs.getString(KEY_CONFIG_ALLOWED_EXTS, "jpg,jpeg,png,webp,heic,mp4,mov,webm,mkv") ?: ""
+        return raw.split(",").map { it.trim().lowercase() }.filter { it.isNotBlank() }
+    }
+
+    fun isPhotoEditingSupported(): Boolean {
+        return prefs.getBoolean(KEY_CONFIG_PHOTO_EDITING, false)
+    }
+
+    fun getServerAppName(): String {
+        return prefs.getString(KEY_CONFIG_APP_NAME, "Chege Photos") ?: "Chege Photos"
+    }
+
     fun getDeviceUuid(): String {
         var uuid = prefs.getString("device_uuid", null)
         if (uuid == null) {
-            uuid = java.util.UUID.randomUUID().toString()
+            uuid = DeviceFingerprint.getCompositeDeviceKey(context)
             prefs.edit().putString("device_uuid", uuid).apply()
         }
         return uuid

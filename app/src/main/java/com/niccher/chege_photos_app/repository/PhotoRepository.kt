@@ -163,6 +163,21 @@ class PhotoRepository(private val context: Context) {
         }
         Log.v(tag, "MIME: $mime")
 
+        val sessionManager = com.niccher.chege_photos_app.utils.SessionManager(context)
+        val maxMb = sessionManager.getMaxUploadSizeMb()
+        val maxBytes = maxMb.toLong() * 1024L * 1024L
+        if (photo.size > maxBytes) {
+            Log.w(tag, "Photo ${photo.name} (${photo.size} bytes) exceeds max upload limit of ${maxMb}MB. Skipping.")
+            return@withContext PhotoSyncResult.Error("Exceeds server limit of ${maxMb}MB")
+        }
+
+        val allowedExts = sessionManager.getAllowedExtensions()
+        val fileExt = photo.name.substringAfterLast('.', "").lowercase()
+        if (allowedExts.isNotEmpty() && fileExt.isNotBlank() && fileExt !in allowedExts) {
+            Log.w(tag, "Photo ${photo.name} has extension .$fileExt not permitted by server. Skipping.")
+            return@withContext PhotoSyncResult.Error("Extension .$fileExt not permitted")
+        }
+
         try {
             val sha256 = com.niccher.chege_photos_app.utils.HashUtils.calculateSha256(context, photo.uri)
             if (sha256 != null) {
@@ -322,6 +337,16 @@ class PhotoRepository(private val context: Context) {
             }
         } catch (e: Exception) {
             saveOfflineAction(id, "RESTORE")
+            false
+        }
+    }
+
+    suspend fun emptyTrash(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val response = ApiClient.getPhotoService(context).emptyTrash()
+            response.isSuccessful && response.body()?.status == "success"
+        } catch (e: Exception) {
+            Log.e("PhotoRepository", "Failed to empty trash", e)
             false
         }
     }

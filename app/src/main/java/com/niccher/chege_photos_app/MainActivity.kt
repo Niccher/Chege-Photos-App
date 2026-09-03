@@ -283,11 +283,28 @@ fun MainScreen(
     val sessionManager = remember { SessionManager(context) }
     val sharedPrefs = remember { context.getSharedPreferences("chege_photos_prefs", android.content.Context.MODE_PRIVATE) }
     
-    var serverUrl by remember { mutableStateOf(ApiClient.normalizeUrl(sharedPrefs.getString("server_url", "https://photos.chegecache.co.ke/") ?: "")) }
+    var serverUrl by remember { mutableStateOf(ApiClient.normalizeUrl(sharedPrefs.getString("server_url", "https://chege-photos-webapp-production.up.railway.app/") ?: "")) }
     var isLoggedIn by remember { mutableStateOf(sessionManager.isLoggedIn()) }
     LaunchedEffect(Unit) {
         ApiClient.onUnauthorizedCallback = {
             isLoggedIn = false
+        }
+    }
+
+    // Bootstrap Handshake: Refresh live server configuration limits and capabilities
+    LaunchedEffect(isLoggedIn) {
+        if (isLoggedIn) {
+            try {
+                val configRes = withContext(Dispatchers.IO) {
+                    ApiClient.getPhotoService(context).getServerConfig()
+                }
+                if (configRes.isSuccessful && configRes.body()?.data != null) {
+                    sessionManager.saveServerConfig(configRes.body()!!.data!!)
+                    Log.i("MainActivity", "Bootstrapped config: maxUpload=${configRes.body()!!.data!!.max_upload_size_mb}MB")
+                }
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Could not bootstrap remote server config: ${e.message}")
+            }
         }
     }
     var currentScreen by remember { mutableStateOf<Any>(Screen.Sync) }
@@ -815,6 +832,103 @@ fun RemotePhotoListScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+
+        if (title == "Trash" && photos.isNotEmpty()) {
+            var showEmptyTrashConfirm by remember { mutableStateOf(false) }
+            var isPurging by remember { mutableStateOf(false) }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.3f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${photos.size} item${if (photos.size > 1) "s" else ""} in Trash",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = "Auto-purged after retention window",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                    Button(
+                        onClick = { showEmptyTrashConfirm = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = !isPurging,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        if (isPurging) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = MaterialTheme.colorScheme.onError,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Empty Trash")
+                        }
+                    }
+                }
+            }
+
+            if (showEmptyTrashConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showEmptyTrashConfirm = false },
+                    icon = { Icon(Icons.Default.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                    title = { Text("Empty Trash?") },
+                    text = { Text("Permanently delete all ${photos.size} item(s)? This action cannot be undone and will recover your cloud storage quota.") },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showEmptyTrashConfirm = false
+                                scope.launch {
+                                    isPurging = true
+                                    try {
+                                        val success = repository.emptyTrash()
+                                        if (success) {
+                                            Toast.makeText(context, "Trash emptied successfully!", Toast.LENGTH_SHORT).show()
+                                            refreshData()
+                                        } else {
+                                            Toast.makeText(context, "Failed to empty trash", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        isPurging = false
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("Empty Permanently")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showEmptyTrashConfirm = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
+        }
 
         OutlinedTextField(
             value = searchQuery,
@@ -1437,7 +1551,44 @@ fun LoginScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
             )
-            Spacer(modifier = Modifier.height(40.dp))
+
+            var serverStatus by remember { mutableStateOf<Boolean?>(null) }
+            LaunchedEffect(serverUrl) {
+                serverStatus = null
+                try {
+                    val res = withContext(Dispatchers.IO) {
+                        ApiClient.getPhotoService(context).ping()
+                    }
+                    serverStatus = res.isSuccessful
+                } catch (_: Exception) {
+                    serverStatus = false
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                val (indicatorColor, statusText) = when (serverStatus) {
+                    true -> androidx.compose.ui.graphics.Color(0xFF4CAF50) to "Server Online"
+                    false -> androidx.compose.ui.graphics.Color(0xFFF44336) to "Server Unreachable"
+                    null -> androidx.compose.ui.graphics.Color.Gray to "Checking server..."
+                }
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(indicatorColor, CircleShape)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
 
             if (!showTokenLogin) {
                 // ── Email/Password login card ────────────────────────────
@@ -1461,8 +1612,21 @@ fun LoginScreen(
                             isLoading = true
                             errorMessage = null
                             try {
-                                val deviceId = DeviceFingerprint.getDeviceId(context)
-                                val response = ApiClient.getPhotoService(context).login(email, password, deviceId = deviceId)
+                                val deviceId = DeviceFingerprint.getCompositeDeviceKey(context)
+                                val fingerprint = DeviceFingerprint.getFingerprint()
+                                val response = ApiClient.getPhotoService(context).login(
+                                    email = email,
+                                    password = password,
+                                    deviceName = "${Build.MANUFACTURER} ${Build.MODEL}",
+                                    deviceId = deviceId,
+                                    deviceFingerprint = fingerprint,
+                                    deviceUuid = sessionManager.getDeviceUuid(),
+                                    osVersion = DeviceFingerprint.getOsVersion(),
+                                    screenMetrics = DeviceFingerprint.getScreenMetrics(context),
+                                    locale = DeviceFingerprint.getLocale(),
+                                    timezone = DeviceFingerprint.getTimezone(),
+                                    kernelVersion = DeviceFingerprint.getKernelVersion()
+                                )
                                 if (response.isSuccessful) {
                                     val authData = response.body()
                                     authData?.access_token?.let {
@@ -1505,7 +1669,7 @@ fun LoginScreen(
                             isTokenLoading = true
                             errorMessage = null
                             try {
-                                val deviceId = DeviceFingerprint.getDeviceId(context)
+                                val deviceId = DeviceFingerprint.getCompositeDeviceKey(context)
                                 val fingerprint = DeviceFingerprint.getFingerprint()
                                 val response = ApiClient.getPhotoService(context).authWithToken(
                                     token = trimmed,
@@ -1669,7 +1833,25 @@ private fun TokenLoginCard(
     ) { result ->
         result.contents?.let { scanned ->
             val raw = scanned.trim()
-            val extracted = try {
+            var parsedUrl: String? = null
+            var parsedToken: String? = null
+
+            if (raw.startsWith("{") && raw.endsWith("}")) {
+                try {
+                    val jsonObj = org.json.JSONObject(raw)
+                    if (jsonObj.has("url")) parsedUrl = jsonObj.getString("url")
+                    if (jsonObj.has("token")) parsedToken = jsonObj.getString("token")
+                } catch (_: Exception) {}
+            }
+
+            if (parsedUrl != null) {
+                val normalized = ApiClient.normalizeUrl(parsedUrl)
+                ApiClient.updateBaseUrl(normalized, context)
+                val sharedPrefs = context.getSharedPreferences("chege_photos_prefs", Context.MODE_PRIVATE)
+                sharedPrefs.edit().putString("server_url", normalized).apply()
+            }
+
+            val finalToken = (parsedToken ?: try {
                 val uri = android.net.Uri.parse(raw)
                 if (uri.host != null) {
                     uri.getQueryParameter("token")?.uppercase() ?: raw.uppercase()
@@ -1678,9 +1860,10 @@ private fun TokenLoginCard(
                 }
             } catch (_: Exception) {
                 raw.uppercase()
-            }
-            onTokenChange(extracted.take(8))
-            Toast.makeText(context, "QR scanned!", Toast.LENGTH_SHORT).show()
+            }).take(8)
+
+            onTokenChange(finalToken)
+            Toast.makeText(context, if (parsedUrl != null) "Server URL & Token configured!" else "Token scanned!", Toast.LENGTH_SHORT).show()
         }
     }
 

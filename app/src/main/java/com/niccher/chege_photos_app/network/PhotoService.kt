@@ -22,7 +22,14 @@ interface PhotoService {
         @Field("email") email: String,
         @Field("password") password: String,
         @Field("device_name") deviceName: String = "Android Device",
-        @Field("device_id") deviceId: String = ""
+        @Field("device_id") deviceId: String = "",
+        @Field("device_fingerprint") deviceFingerprint: String = "",
+        @Field("device_uuid") deviceUuid: String = "",
+        @Field("os_version") osVersion: String = "",
+        @Field("screen_metrics") screenMetrics: String = "",
+        @Field("locale") locale: String = "",
+        @Field("timezone") timezone: String = "",
+        @Field("kernel_version") kernelVersion: String = ""
     ): Response<AuthResponse>
 
     @POST("api/v1/auth-with-token")
@@ -84,6 +91,9 @@ interface PhotoService {
 
     @POST("api/v1/photos/restore/{id}")
     suspend fun restorePhoto(@Path("id") id: String): Response<AuthResponse>
+
+    @POST("api/v1/photos/empty-trash")
+    suspend fun emptyTrash(): Response<AuthResponse>
 
     @POST("api/v1/photos/archive/{id}")
     suspend fun archivePhoto(@Path("id") id: String): Response<AuthResponse>

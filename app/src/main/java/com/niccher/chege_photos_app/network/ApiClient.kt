@@ -18,7 +18,7 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 object ApiClient {
-    private var baseUrl = "https://photos.chegecache.co.ke/"
+    private var baseUrl = "https://chege-photos-webapp-production.up.railway.app/"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -33,25 +33,23 @@ object ApiClient {
 
     // ── URL normalisation ────────────────────────────────────────────────────
 
-    /**
-     * Normalise a user-typed server address into a valid Retrofit base URL.
-     *
-     * Rules (applied in order):
-     *  1. Strip whitespace.
-     *  2. If already has a scheme (contains "://") → just ensure trailing slash.
-     *  3. Otherwise auto-detect scheme:
-     *       - Private IPv4 ranges, loopback, *.local hostnames  → http://
-     *       - Anything else                                       → https://
-     *  4. Ensure trailing slash.
-     *
-     * Examples:
-     *   "192.168.1.50:2283"  → "http://192.168.1.50:2283/"
-     *   "10.0.0.5"           → "http://10.0.0.5/"
-     *   "mynas.local:8080"   → "http://mynas.local:8080/"
-     *   "photos.example.com" → "https://photos.example.com/"
-     *   "http://192.168.1.5" → "http://192.168.1.5/"   (scheme kept)
-     *   "https://mysite.com" → "https://mysite.com/"   (scheme kept)
-     */
+    fun isPrivateOrLocalHost(raw: String): Boolean {
+        val trimmed = raw.trim()
+        val host = if ("://" in trimmed) {
+            trimmed.substringAfter("://").substringBefore("/").substringBefore(":")
+        } else {
+            trimmed.substringBefore("/").substringBefore(":")
+        }
+        return host.equals("localhost", ignoreCase = true) ||
+            host == "127.0.0.1" ||
+            host == "::1" ||
+            host.endsWith(".local", ignoreCase = true) ||
+            host.matches(Regex("""^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$""")) ||
+            host.matches(Regex("""^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$""")) ||
+            host.matches(Regex("""^192\.168\.\d{1,3}\.\d{1,3}$""")) ||
+            host.matches(Regex("""^169\.254\.\d{1,3}\.\d{1,3}$"""))
+    }
+
     fun normalizeUrl(raw: String): String {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return baseUrl
@@ -61,23 +59,7 @@ object ApiClient {
             return if (trimmed.endsWith("/")) trimmed else "$trimmed/"
         }
 
-        // Extract host (before the first ":" which could be a port separator)
-        val host = trimmed.substringBefore(":")
-
-        val isPrivateOrLocal =
-            host.equals("localhost", ignoreCase = true) ||
-            host == "127.0.0.1" ||
-            host == "::1" ||
-            host.endsWith(".local", ignoreCase = true) ||
-            // 10.0.0.0/8
-            host.matches(Regex("""^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$""")) ||
-            // 172.16.0.0/12  (172.16.x.x – 172.31.x.x)
-            host.matches(Regex("""^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$""")) ||
-            // 192.168.0.0/16
-            host.matches(Regex("""^192\.168\.\d{1,3}\.\d{1,3}$""")) ||
-            // 169.254.x.x link-local
-            host.matches(Regex("""^169\.254\.\d{1,3}\.\d{1,3}$"""))
-
+        val isPrivateOrLocal = isPrivateOrLocalHost(trimmed)
         val scheme = if (isPrivateOrLocal) "http" else "https"
         val full = "$scheme://$trimmed"
         return if (full.endsWith("/")) full else "$full/"
@@ -88,29 +70,13 @@ object ApiClient {
     // ── OkHttp client ────────────────────────────────────────────────────────
 
     /**
-     * Build a trust-all X509TrustManager so connections to local servers with
-     * self-signed certificates succeed (e.g. your NAS or Raspberry Pi running
-     * an HTTPS server with a self-signed cert).
-     *
-     * This is intentionally permissive — it is only used here for a
-     * self-hosted media server client where the user controls both ends.
+     * Build an OkHttpClient with smart conditional TLS:
+     * - For private/local IPs (e.g. NAS/homelab), trust self-signed certs.
+     * - For public domains (e.g. Railway), enforce standard strict Android TLS.
      */
-    private fun buildTrustAllClient(context: Context): OkHttpClient {
+    private fun buildClient(context: Context, url: String): OkHttpClient {
         val sessionManager = SessionManager(context)
-
-        val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-        })
-
-        val sslContext = SSLContext.getInstance("TLS").apply {
-            init(null, trustAllCerts, java.security.SecureRandom())
-        }
-
-        return OkHttpClient.Builder()
-            .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-            .hostnameVerifier { _, _ -> true }          // accept any hostname for local IPs
+        val builder = OkHttpClient.Builder()
             .addInterceptor(logging)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(300, TimeUnit.SECONDS)
@@ -136,7 +102,21 @@ object ApiClient {
                 }
                 response
             }
-            .build()
+
+        if (isPrivateOrLocalHost(url)) {
+            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            })
+            val sslContext = SSLContext.getInstance("TLS").apply {
+                init(null, trustAllCerts, java.security.SecureRandom())
+            }
+            builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+            builder.hostnameVerifier { _, _ -> true }
+        }
+
+        return builder.build()
     }
 
     // ── Service management ───────────────────────────────────────────────────
@@ -146,7 +126,7 @@ object ApiClient {
 
     fun getHttpClient(context: Context): OkHttpClient {
         if (_httpClient == null) {
-            _httpClient = buildTrustAllClient(context)
+            _httpClient = buildClient(context, baseUrl)
         }
         return _httpClient!!
     }
@@ -159,10 +139,12 @@ object ApiClient {
                 baseUrl = normalizeUrl(savedUrl)
             }
             try {
+                _httpClient = buildClient(context, baseUrl)
                 _photoService = createService(baseUrl, context)
             } catch (e: Exception) {
                 Log.e("ApiClient", "Invalid base URL, falling back to default", e)
-                baseUrl = "https://photos.chegecache.co.ke/"
+                baseUrl = "https://chege-photos-webapp-production.up.railway.app/"
+                _httpClient = buildClient(context, baseUrl)
                 _photoService = createService(baseUrl, context)
             }
         }
@@ -176,8 +158,9 @@ object ApiClient {
             if (normalized.toHttpUrlOrNull() == null) {
                 return
             }
-            if (baseUrl != normalized) {
+            if (baseUrl != normalized || _photoService == null) {
                 baseUrl = normalized
+                _httpClient = buildClient(context, baseUrl)
                 _photoService = createService(baseUrl, context)
             }
         } catch (e: Exception) {
