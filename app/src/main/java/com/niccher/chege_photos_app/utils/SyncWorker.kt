@@ -6,6 +6,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.niccher.chege_photos_app.repository.PhotoRepository
 import com.niccher.chege_photos_app.repository.PhotoSyncResult
+import com.niccher.chege_photos_app.showUploadNotification
 
 class SyncWorker(
     private val context: Context,
@@ -29,10 +30,25 @@ class SyncWorker(
 
         return try {
             val localPhotos = repository.getLocalPhotos()
-            Log.d("SyncWorker", "Found ${localPhotos.size} local photos to sync.")
+            val total = localPhotos.size
+            Log.d("SyncWorker", "Found $total local photos to sync.")
+            
+            if (total == 0) {
+                return Result.success()
+            }
+
+            showUploadNotification(context, 0, total)
             
             var successCount = 0
-            for (photo in localPhotos) {
+            for ((index, photo) in localPhotos.withIndex()) {
+                if (isStopped) {
+                    Log.d("SyncWorker", "Sync worker was cancelled.")
+                    showUploadNotification(context, successCount, total, isFinished = true)
+                    return Result.failure()
+                }
+
+                showUploadNotification(context, index + 1, total, isFinished = false, currentFileName = photo.name)
+
                 // SyncPhoto already calculates and checks the SHA-256 hash before uploading
                 val syncResult = repository.syncPhoto(photo)
                 if (syncResult is PhotoSyncResult.Success) {
@@ -40,10 +56,12 @@ class SyncWorker(
                     sessionManager.updateLastUpload()
                 } else if (syncResult is PhotoSyncResult.Error && syncResult.message.contains("Server unreachable", ignoreCase = true)) {
                     Log.w("SyncWorker", "Connection lost mid-sync. Pausing batch.")
+                    showUploadNotification(context, successCount, total, isFinished = true)
                     return Result.retry()
                 }
             }
             
+            showUploadNotification(context, successCount, total, isFinished = true)
             Log.d("SyncWorker", "Successfully synced $successCount photos.")
             Result.success()
         } catch (e: Exception) {

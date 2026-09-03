@@ -161,7 +161,7 @@ class ManualUploadWorker(
             ))
 
             // Show updated notification for current item
-            showUploadNotification(context, i + 1, total)
+            showUploadNotification(context, i + 1, total, isFinished = false, currentFileName = name)
 
             // Sync the photo
             val syncResult = repository.syncPhoto(localPhoto, albumId = albumId) { progress ->

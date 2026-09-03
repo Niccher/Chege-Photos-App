@@ -2943,29 +2943,53 @@ private suspend fun downloadRemotePhoto(context: Context, baseUrl: String, photo
     }
 }
 
-fun showUploadNotification(context: Context, current: Int, total: Int, isFinished: Boolean = false) {
+fun showUploadNotification(
+    context: Context,
+    current: Int,
+    total: Int,
+    isFinished: Boolean = false,
+    currentFileName: String? = null
+) {
+    val channelId = "file_transfer_channel"
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val systemNotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        if (systemNotificationManager != null && systemNotificationManager.getNotificationChannel(channelId) == null) {
+            val channel = NotificationChannel(
+                channelId,
+                "File Transfers",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Notifications for photo uploads and background sync"
+                setShowBadge(false)
+            }
+            systemNotificationManager.createNotificationChannel(channel)
+        }
+    }
+
     val notificationManager = NotificationManagerCompat.from(context)
-    val percentage = if (total > 0) (current * 100) / total else 0
-    val builder = NotificationCompat.Builder(context, "file_transfer_channel")
-        .setSmallIcon(R.drawable.ic_app_icon)
-        .setContentTitle("Chege Photos")
-        .setSubText(if (isFinished) "Sync Complete" else "Syncing...")
+    val percentage = if (total > 0) ((current.toFloat() / total) * 100).toInt() else 0
+    val builder = NotificationCompat.Builder(context, channelId)
+        .setSmallIcon(R.drawable.ic_sync_notification)
+        .setContentTitle(if (isFinished) "Sync Complete" else "Uploading $current of $total")
+        .setSubText(if (isFinished) "Complete" else "$percentage%")
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setOngoing(!isFinished)
         .setOnlyAlertOnce(true)
 
     if (isFinished) {
-        builder.setContentText("Successfully synced $total items to gallery")
+        builder.setContentText("Successfully synced $total items to server")
             .setProgress(0, 0, false)
+            .setAutoCancel(true)
     } else {
-        builder.setContentText("Syncing $current of $total items ($percentage%)")
+        val fileDetail = if (!currentFileName.isNullOrBlank()) " • $currentFileName" else ""
+        builder.setContentText("Uploading $current of $total items ($percentage%)$fileDetail")
             .setProgress(total, current, false)
     }
 
     try {
         notificationManager.notify(1001, builder.build())
     } catch (e: SecurityException) {
-        // Handle missing permission gracefully
+        android.util.Log.w("Notification", "Missing notification permission: ${e.message}")
     }
 }
 
@@ -3576,7 +3600,7 @@ fun PhotoDetailsBottomSheet(
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.clickable {
-                            showUploadNotification(context, 1, 1)
+                            showUploadNotification(context, 1, 1, isFinished = false, currentFileName = photo.filename)
                             scope.launch {
                                 val uri = Uri.parse(photo.path)
                                 val localPhoto = com.niccher.chege_photos_app.repository.LocalPhoto(
