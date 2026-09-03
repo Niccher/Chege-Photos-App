@@ -281,6 +281,7 @@ fun MainScreen(
     themeState: MutableState<com.niccher.chege_photos_app.ui.theme.AppTheme>
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
     val sessionManager = remember { SessionManager(context) }
     val sharedPrefs = remember { context.getSharedPreferences("chege_photos_prefs", android.content.Context.MODE_PRIVATE) }
     
@@ -366,7 +367,6 @@ fun MainScreen(
     }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
     
     val appVersion = remember {
         try {
