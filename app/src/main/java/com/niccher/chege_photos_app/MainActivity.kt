@@ -43,6 +43,9 @@ import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.*
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -495,12 +498,12 @@ fun MainScreen(
                     contentAlignment = Alignment.BottomStart
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        androidx.compose.foundation.Image(
-                            painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_app_icon),
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_app_icon),
                             contentDescription = "App Icon",
                             modifier = Modifier
                                 .size(64.dp)
-                                .androidx.compose.ui.draw.clip(RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(16.dp))
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -580,12 +583,12 @@ fun MainScreen(
                     CenterAlignedTopAppBar(
                         title = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                androidx.compose.foundation.Image(
-                                    painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_app_icon),
+                                Image(
+                                    painter = painterResource(id = R.drawable.ic_app_icon),
                                     contentDescription = null,
                                     modifier = Modifier
                                         .size(24.dp)
-                                        .androidx.compose.ui.draw.clip(RoundedCornerShape(6.dp))
+                                        .clip(RoundedCornerShape(6.dp))
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(if (currentScreen is Screen) (currentScreen as Screen).title else (currentScreen as SidebarItem).title)
@@ -1655,12 +1658,12 @@ fun LoginScreen(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                androidx.compose.foundation.Image(
-                    painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_app_icon),
+                Image(
+                    painter = painterResource(id = R.drawable.ic_app_icon),
                     contentDescription = "App icon",
                     modifier = Modifier
                         .size(72.dp)
-                        .androidx.compose.ui.draw.clip(RoundedCornerShape(18.dp))
+                        .clip(RoundedCornerShape(18.dp))
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -2095,7 +2098,7 @@ private fun EmailPasswordContent(
 
         OutlinedTextField(
             value = email,
-            onEmailChange = onEmailChange,
+            onValueChange = onEmailChange,
             label = { Text("Email") },
             leadingIcon = { Icon(Icons.Default.Email, null, tint = MaterialTheme.colorScheme.primary) },
             modifier = Modifier.fillMaxWidth(),
@@ -4072,12 +4075,12 @@ fun AboutScreen(version: String) {
                     modifier = Modifier.size(80.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        androidx.compose.foundation.Image(
-                            painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_app_icon),
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_app_icon),
                             contentDescription = null,
                             modifier = Modifier
                                 .size(64.dp)
-                                .androidx.compose.ui.draw.clip(RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(16.dp))
                         )
                     }
                 }
