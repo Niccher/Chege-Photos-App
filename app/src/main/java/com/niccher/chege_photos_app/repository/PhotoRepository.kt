@@ -40,6 +40,43 @@ class PhotoRepository(private val context: Context) {
     private val photoDao = database.photoDao()
     private val offlineActionDao = database.offlineActionDao()
 
+    companion object {
+        private val json = kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+            coerceInputValues = true
+        }
+
+        @Volatile
+        private var lastServerCheckSuccessTime: Long = 0L
+        @Volatile
+        private var lastServerCheckFailureTime: Long = 0L
+        private const val REACHABILITY_RECHECK_WINDOW_MS = 15_000L // 15 seconds cooldown
+    }
+
+    suspend fun isServerReachable(): Boolean = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        if (now - lastServerCheckFailureTime < REACHABILITY_RECHECK_WINDOW_MS) {
+            return@withContext false
+        }
+        if (now - lastServerCheckSuccessTime < 30_000L) {
+            return@withContext true
+        }
+
+        try {
+            val response = ApiClient.getPhotoService(context).ping()
+            if (response.isSuccessful) {
+                lastServerCheckSuccessTime = System.currentTimeMillis()
+                true
+            } else {
+                lastServerCheckFailureTime = System.currentTimeMillis()
+                false
+            }
+        } catch (_: Exception) {
+            lastServerCheckFailureTime = System.currentTimeMillis()
+            false
+        }
+    }
+
     val photosRefreshTrigger = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     suspend fun getLocalPhotos(): List<LocalPhoto> = withContext(Dispatchers.IO) {
@@ -104,13 +141,47 @@ class PhotoRepository(private val context: Context) {
         photos
     }
 
-    suspend fun clearLocalData() {
+    suspend fun clearLocalData() = withContext(Dispatchers.IO) {
         try {
-            photoDao.clearAll()
+            // 1. Cancel background workers
+            try {
+                androidx.work.WorkManager.getInstance(context).cancelAllWork()
+            } catch (e: Exception) {
+                Log.w("PhotoRepository", "Failed to cancel work manager jobs: ${e.message}")
+            }
+
+            // 2. Clear all Room tables
+            try {
+                database.clearAllTables()
+            } catch (e: Exception) {
+                Log.e("PhotoRepository", "Failed to clear room database tables", e)
+            }
+
+            // 3. Purge Coil disk & memory cache
+            try {
+                val imageLoader = ApiClient.getImageLoader(context)
+                imageLoader.memoryCache?.clear()
+                imageLoader.diskCache?.clear()
+            } catch (e: Exception) {
+                Log.w("PhotoRepository", "Failed to clear image caches: ${e.message}")
+            }
+
+            // 4. Clean local cache directory
+            try {
+                context.cacheDir.listFiles()?.forEach { file ->
+                    file.deleteRecursively()
+                }
+            } catch (e: Exception) {
+                Log.w("PhotoRepository", "Failed to clear cacheDir: ${e.message}")
+            }
+
+            Log.i("PhotoRepository", "Local user data, database, and image cache completely wiped.")
         } catch (e: Exception) {
-            Log.e("PhotoRepository", "Failed to clear database cache", e)
+            Log.e("PhotoRepository", "Error clearing local user data", e)
         }
     }
+
+    suspend fun clearLocalUserData() = clearLocalData()
 
     fun getPhotosFlow(): Flow<List<Photo>> {
         return photoDao.getAllPhotos().map { list -> list.map { it.toPhoto() } }
@@ -178,6 +249,11 @@ class PhotoRepository(private val context: Context) {
             return@withContext PhotoSyncResult.Error("Extension .$fileExt not permitted")
         }
 
+        if (!isServerReachable()) {
+            Log.w(tag, "Backend server is unreachable. Skipping upload for ${photo.name}.")
+            return@withContext PhotoSyncResult.Error("Server unreachable. Waiting for connection.")
+        }
+
         try {
             val sha256 = com.niccher.chege_photos_app.utils.HashUtils.calculateSha256(context, photo.uri)
             if (sha256 != null) {
@@ -237,8 +313,7 @@ class PhotoRepository(private val context: Context) {
             Log.d(tag, "Response HTTP ${response.code()}: ${response.message()}")
 
             val bodyStr = response.body()?.let { 
-                kotlinx.serialization.json.Json { ignoreUnknownKeys = true; coerceInputValues = true }
-                    .encodeToString(kotlinx.serialization.serializer<com.niccher.chege_photos_app.models.AuthResponse>(), it)
+                json.encodeToString(kotlinx.serialization.serializer<com.niccher.chege_photos_app.models.AuthResponse>(), it)
             } ?: "null"
             Log.v(tag, "Response body: $bodyStr")
 
@@ -290,6 +365,7 @@ class PhotoRepository(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
+            lastServerCheckFailureTime = System.currentTimeMillis()
             Log.e(tag, "Upload EXCEPTION for ${photo.name}: ${e.localizedMessage}", e)
             PhotoSyncResult.Error(e.localizedMessage ?: "Unknown exception")
         }

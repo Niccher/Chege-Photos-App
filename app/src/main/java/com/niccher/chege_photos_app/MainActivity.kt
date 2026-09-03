@@ -42,6 +42,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -287,6 +288,9 @@ fun MainScreen(
     var isLoggedIn by remember { mutableStateOf(sessionManager.isLoggedIn()) }
     LaunchedEffect(Unit) {
         ApiClient.onUnauthorizedCallback = {
+            scope.launch {
+                repository.clearLocalUserData()
+            }
             isLoggedIn = false
         }
     }
@@ -581,7 +585,7 @@ fun MainScreen(
                         },
                         actions = {
                             IconButton(onClick = { showLogoutDialog = true }) {
-                                Icon(Icons.Default.Logout, contentDescription = "Logout", tint = MaterialTheme.colorScheme.error)
+                                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Logout", tint = MaterialTheme.colorScheme.error)
                             }
                         }
                     )
@@ -1434,7 +1438,7 @@ fun RemotePhotoListScreen(
                         
                         downloadProgress[photo.path]?.let { progress ->
                             LinearProgressIndicator(
-                                progress = progress,
+                                progress = { progress },
                                 modifier = Modifier.fillMaxWidth()
                                     .align(Alignment.BottomCenter)
                                     .padding(bottom = 80.dp),
@@ -1799,7 +1803,7 @@ private fun LoginCard(
                     CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp)); Text("Signing in…")
                 } else {
-                    Icon(Icons.Default.Login, null, Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Sign In", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
@@ -1931,7 +1935,7 @@ private fun TokenLoginCard(
             Spacer(Modifier.height(16.dp))
 
             TextButton(onClick = onSwitchToEmail) {
-                Icon(Icons.Default.Login, null, Modifier.size(16.dp))
+                Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("Login with Email")
             }
@@ -2283,7 +2287,7 @@ fun SyncScreen(repository: PhotoRepository) {
                     if (currentlySyncingName == photo.name || isSyncing && photo in photos.take(processedCount)) {
                         val progress = if (currentlySyncingName == photo.name) currentFileProgress else 1f
                         LinearProgressIndicator(
-                            progress = progress,
+                            progress = { progress },
                             modifier = Modifier.fillMaxWidth().height(6.dp),
                             color = if (progress < 1f) MaterialTheme.colorScheme.primary else Color.Green,
                             strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
@@ -2476,7 +2480,7 @@ fun AlbumsScreen(repository: PhotoRepository, baseUrl: String, activeDownloads: 
                     selectedAlbum = null
                     albumPhotosCount = null 
                 }) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
                 val totalCount = albumPhotosCount ?: (selectedAlbum!!.photo_count?.toIntOrNull() ?: 0) + (selectedAlbum!!.video_count?.toIntOrNull() ?: 0)
                 Text(
@@ -2719,10 +2723,13 @@ private suspend fun downloadRemotePhoto(context: Context, baseUrl: String, photo
                 val file = File(dir, filename)
                 file.writeBytes(bytes)
                 // Notify the media scanner
-                val scannedUri = Uri.fromFile(file)
-                val intent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, scannedUri)
-                context.sendBroadcast(intent)
-                return@withContext scannedUri
+                android.media.MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(file.absolutePath),
+                    arrayOf(mimeType ?: "image/jpeg"),
+                    null
+                )
+                return@withContext Uri.fromFile(file)
             }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
@@ -3485,10 +3492,7 @@ fun PhotoDetailsBottomSheet(
                                     val resp = ApiClient.getPhotoService(context).deletePhoto(pid)
                                     if (resp.isSuccessful) {
                                         val db = com.niccher.chege_photos_app.data.AppDatabase.getDatabase(context)
-                                        val photoId = photo.id
-                                        if (photoId != null) {
-                                            db.photoDao().deleteById(photoId)
-                                        }
+                                        db.photoDao().deleteById(pid)
                                         Toast.makeText(context, "Photo moved to Trash", Toast.LENGTH_SHORT).show()
                                         onDismiss()
                                         onPhotoDeleted?.invoke()
@@ -3521,7 +3525,7 @@ fun PhotoDetailsBottomSheet(
                 if (photo.width != null) {
                     MetadataRow(Icons.Default.AspectRatio, "Dimensions", "${photo.width} x ${photo.height}")
                 }
-                MetadataRow(Icons.Default.Label, "Format", photo.mime_type ?: "Unknown")
+                MetadataRow(Icons.AutoMirrored.Filled.Label, "Format", photo.mime_type ?: "Unknown")
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -3700,7 +3704,7 @@ fun ServerConfigScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onNavigateBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
             Spacer(modifier = Modifier.width(8.dp))
             Text(

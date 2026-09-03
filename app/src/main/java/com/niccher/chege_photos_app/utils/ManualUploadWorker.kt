@@ -42,6 +42,11 @@ class ManualUploadWorker(
 
         Log.d("ManualUploadWorker", "Queueing upload of $total manual items.")
         val repository = PhotoRepository(context)
+        if (!repository.isServerReachable()) {
+            Log.w("ManualUploadWorker", "Server is currently unreachable. Pausing manual upload.")
+            return Result.retry()
+        }
+
         var successCount = 0
         
         // Show initial notification
@@ -102,6 +107,10 @@ class ManualUploadWorker(
             } else {
                 val errMsg = (syncResult as? PhotoSyncResult.Error)?.message ?: "Unknown error"
                 Log.e("ManualUploadWorker", "Failed to sync photo $name: $errMsg")
+                if (errMsg.contains("Server unreachable", ignoreCase = true)) {
+                    Log.w("ManualUploadWorker", "Server became unreachable mid-batch. Retrying later.")
+                    return Result.retry()
+                }
             }
         }
 

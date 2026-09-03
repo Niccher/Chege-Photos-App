@@ -22,6 +22,11 @@ class SyncWorker(
         }
 
         val repository = PhotoRepository(context)
+        if (!repository.isServerReachable()) {
+            Log.w("SyncWorker", "Server is currently unreachable. Pausing auto-sync.")
+            return Result.retry()
+        }
+
         return try {
             val localPhotos = repository.getLocalPhotos()
             Log.d("SyncWorker", "Found ${localPhotos.size} local photos to sync.")
@@ -33,6 +38,9 @@ class SyncWorker(
                 if (syncResult is PhotoSyncResult.Success) {
                     successCount++
                     sessionManager.updateLastUpload()
+                } else if (syncResult is PhotoSyncResult.Error && syncResult.message.contains("Server unreachable", ignoreCase = true)) {
+                    Log.w("SyncWorker", "Connection lost mid-sync. Pausing batch.")
+                    return Result.retry()
                 }
             }
             
