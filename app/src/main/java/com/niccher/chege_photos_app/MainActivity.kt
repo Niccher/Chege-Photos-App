@@ -495,11 +495,12 @@ fun MainScreen(
                     contentAlignment = Alignment.BottomStart
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.PhotoLibrary,
+                        androidx.compose.foundation.Image(
+                            painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_app_icon),
                             contentDescription = "App Icon",
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onPrimary
+                            modifier = Modifier
+                                .size(64.dp)
+                                .androidx.compose.ui.draw.clip(RoundedCornerShape(16.dp))
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -577,7 +578,19 @@ fun MainScreen(
             topBar = {
                 if (isLoggedIn) {
                     CenterAlignedTopAppBar(
-                        title = { Text(if (currentScreen is Screen) (currentScreen as Screen).title else (currentScreen as SidebarItem).title) },
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                androidx.compose.foundation.Image(
+                                    painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_app_icon),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .androidx.compose.ui.draw.clip(RoundedCornerShape(6.dp))
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(if (currentScreen is Screen) (currentScreen as Screen).title else (currentScreen as SidebarItem).title)
+                            }
+                        },
                         navigationIcon = {
                             IconButton(onClick = { scope.launch { drawerState.open() } }) {
                                 Icon(Icons.Default.Menu, contentDescription = "Menu")
@@ -1481,6 +1494,12 @@ fun RemotePhotoListScreen(
     }
 }
 
+enum class LoginMethod(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    QR_SCAN("Scan QR", Icons.Default.QrCodeScanner),
+    TOKEN("Token", Icons.Default.Key),
+    EMAIL("Email", Icons.Default.Email)
+}
+
 @Composable
 fun LoginScreen(
     serverUrl: String,
@@ -1495,15 +1514,115 @@ fun LoginScreen(
     val sessionManager = remember { SessionManager(context) }
     val scope = rememberCoroutineScope()
 
+    var selectedMethod by remember { mutableStateOf(LoginMethod.QR_SCAN) }
+    var tokenInput by remember { mutableStateOf("") }
+    var isTokenLoading by remember { mutableStateOf(false) }
+
     var isLoading by remember { mutableStateOf(false) }
     var passwordVisible by remember { mutableStateOf(false) }
     var showAdvanced by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    var showTokenLogin by remember { mutableStateOf(false) }
-    var tokenInput by remember { mutableStateOf("") }
-    var isTokenLoading by remember { mutableStateOf(false) }
+    val authenticateWithToken: (String, String?) -> Unit = { rawToken, newUrl ->
+        scope.launch {
+            isTokenLoading = true
+            errorMessage = null
+            try {
+                if (newUrl != null) {
+                    val normalized = ApiClient.normalizeUrl(newUrl)
+                    onUrlChange(normalized)
+                    ApiClient.updateBaseUrl(normalized, context)
+                    val sharedPrefs = context.getSharedPreferences("chege_photos_prefs", Context.MODE_PRIVATE)
+                    sharedPrefs.edit().putString("server_url", normalized).apply()
+                }
 
+                val deviceId = DeviceFingerprint.getCompositeDeviceKey(context)
+                val fingerprint = DeviceFingerprint.getFingerprint()
+                val response = ApiClient.getPhotoService(context).authWithToken(
+                    token = rawToken,
+                    deviceId = deviceId,
+                    deviceFingerprint = fingerprint,
+                    deviceName = "${Build.MANUFACTURER} ${Build.MODEL}",
+                    deviceUuid = sessionManager.getDeviceUuid(),
+                    osVersion = DeviceFingerprint.getOsVersion(),
+                    screenMetrics = DeviceFingerprint.getScreenMetrics(context),
+                    locale = DeviceFingerprint.getLocale(),
+                    timezone = DeviceFingerprint.getTimezone(),
+                    kernelVersion = DeviceFingerprint.getKernelVersion()
+                )
+                if (response.isSuccessful) {
+                    val authData = response.body()
+                    authData?.access_token?.let {
+                        sessionManager.saveAuthToken(it)
+                        authData.user?.let { user ->
+                            sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
+                            sessionManager.updateLastLogin()
+                        }
+                        onLogin()
+                        Toast.makeText(context, "Connected as ${authData.user?.username ?: "User"}!", Toast.LENGTH_SHORT).show()
+                    } ?: run {
+                        errorMessage = "Invalid response from server"
+                    }
+                } else {
+                    errorMessage = "Token auth failed: Invalid or expired token"
+                }
+            } catch (e: Exception) {
+                errorMessage = "Cannot reach server. Check network connection."
+            } finally {
+                isTokenLoading = false
+            }
+        }
+    }
+
+    val scanLauncher = rememberLauncherForActivityResult(
+        com.journeyapps.barcodescanner.ScanContract()
+    ) { result ->
+        result.contents?.let { scanned ->
+            val raw = scanned.trim()
+            var parsedUrl: String? = null
+            var parsedToken: String? = null
+
+            if (raw.startsWith("{") && raw.endsWith("}")) {
+                try {
+                    val jsonObj = org.json.JSONObject(raw)
+                    if (jsonObj.has("url")) parsedUrl = jsonObj.getString("url")
+                    if (jsonObj.has("token")) parsedToken = jsonObj.getString("token")
+                } catch (_: Exception) {}
+            }
+
+            if (parsedUrl == null) {
+                try {
+                    val uri = android.net.Uri.parse(raw)
+                    if (uri.scheme != null && uri.host != null) {
+                        parsedUrl = "${uri.scheme}://${uri.host}" + if (uri.port > 0) ":${uri.port}" else ""
+                        parsedToken = uri.getQueryParameter("token")
+                    }
+                } catch (_: Exception) {}
+            }
+
+            val finalToken = (parsedToken ?: raw).trim().uppercase().take(8)
+
+            if (finalToken.length == 8) {
+                tokenInput = finalToken
+                Toast.makeText(context, "Pairing with WebApp...", Toast.LENGTH_SHORT).show()
+                authenticateWithToken(finalToken, parsedUrl)
+            } else {
+                errorMessage = "Scanned QR code did not contain a valid 8-character token"
+            }
+        }
+    }
+
+    val launchScanner = {
+        val options = com.journeyapps.barcodescanner.ScanOptions().apply {
+            setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
+            setPrompt("Scan Chege Photos Token QR Code")
+            setCameraId(0)
+            setBeepEnabled(false)
+            setBarcodeImageEnabled(false)
+            setCaptureActivity(com.niccher.chege_photos_app.utils.PortraitCaptureActivity::class.java)
+        }
+        scanLauncher.launch(options)
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -1529,18 +1648,19 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(56.dp))
             Box(
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(88.dp)
                     .background(
                         color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.2f),
                         shape = RoundedCornerShape(24.dp)
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.PhotoLibrary,
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_app_icon),
                     contentDescription = "App icon",
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier
+                        .size(72.dp)
+                        .androidx.compose.ui.draw.clip(RoundedCornerShape(18.dp))
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -1594,124 +1714,149 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            if (!showTokenLogin) {
-                // ── Email/Password login card ────────────────────────────
-                LoginCard(
-                    serverUrl = serverUrl,
-                    onUrlChange = onUrlChange,
-                    email = email,
-                    onEmailChange = onEmailChange,
-                    password = password,
-                    onPasswordChange = onPasswordChange,
-                    isLoading = isLoading,
-                    errorMessage = errorMessage,
-                    passwordVisible = passwordVisible,
-                    showAdvanced = showAdvanced,
-                    onToggleAdvanced = { showAdvanced = !showAdvanced },
-                    onTogglePasswordVisibility = { passwordVisible = !passwordVisible },
-                    onLogin = {
-                        if (email.isBlank()) { errorMessage = "Email is required"; return@LoginCard }
-                        if (password.isBlank()) { errorMessage = "Password is required"; return@LoginCard }
-                        scope.launch {
-                            isLoading = true
-                            errorMessage = null
-                            try {
-                                val deviceId = DeviceFingerprint.getCompositeDeviceKey(context)
-                                val fingerprint = DeviceFingerprint.getFingerprint()
-                                val response = ApiClient.getPhotoService(context).login(
-                                    email = email,
-                                    password = password,
-                                    deviceName = "${Build.MANUFACTURER} ${Build.MODEL}",
-                                    deviceId = deviceId,
-                                    deviceFingerprint = fingerprint,
-                                    deviceUuid = sessionManager.getDeviceUuid(),
-                                    osVersion = DeviceFingerprint.getOsVersion(),
-                                    screenMetrics = DeviceFingerprint.getScreenMetrics(context),
-                                    locale = DeviceFingerprint.getLocale(),
-                                    timezone = DeviceFingerprint.getTimezone(),
-                                    kernelVersion = DeviceFingerprint.getKernelVersion()
-                                )
-                                if (response.isSuccessful) {
-                                    val authData = response.body()
-                                    authData?.access_token?.let {
-                                        sessionManager.saveAuthToken(it)
-                                        authData.user?.let { user ->
-                                            sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
-                                            sessionManager.updateLastLogin()
-                                        }
-                                        onLogin()
-                                        Toast.makeText(context, "Welcome back!", Toast.LENGTH_SHORT).show()
-                                    } ?: run {
-                                        errorMessage = "Invalid response from server"
-                                    }
-                                } else {
-                                    errorMessage = "Login failed: ${response.message()}"
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                shadowElevation = 12.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Segmented Method Selector
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        LoginMethod.values().forEach { method ->
+                            val isSelected = selectedMethod == method
+                            Surface(
+                                selected = isSelected,
+                                onClick = {
+                                    selectedMethod = method
+                                    errorMessage = null
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f).height(40.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxSize(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(method.icon, contentDescription = null, Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = method.label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    )
                                 }
-                            } catch (e: Exception) {
-                                errorMessage = "Cannot reach server. Check your URL."
-                            } finally {
-                                isLoading = false
                             }
                         }
-                    },
-                    onSwitchToToken = { showTokenLogin = true }
-                )
-            } else {
-                // ── Token login card ─────────────────────────────────────
-                TokenLoginCard(
-                    token = tokenInput,
-                    onTokenChange = { tokenInput = it; errorMessage = null },
-                    isLoading = isTokenLoading,
-                    errorMessage = errorMessage,
-                    onLogin = {
-                        val trimmed = tokenInput.trim().uppercase()
-                        if (trimmed.length != 8) {
-                            errorMessage = "Token must be 8 characters"
-                            return@TokenLoginCard
+                    }
+
+                    Spacer(Modifier.height(20.dp))
+
+                    when (selectedMethod) {
+                        LoginMethod.QR_SCAN -> {
+                            QrPairingContent(
+                                isPairing = isTokenLoading,
+                                errorMessage = errorMessage,
+                                onScanClick = launchScanner
+                            )
                         }
-                        scope.launch {
-                            isTokenLoading = true
-                            errorMessage = null
-                            try {
-                                val deviceId = DeviceFingerprint.getCompositeDeviceKey(context)
-                                val fingerprint = DeviceFingerprint.getFingerprint()
-                                val response = ApiClient.getPhotoService(context).authWithToken(
-                                    token = trimmed,
-                                    deviceId = deviceId,
-                                    deviceFingerprint = fingerprint,
-                                    deviceName = "${Build.MANUFACTURER} ${Build.MODEL}",
-                                    deviceUuid = sessionManager.getDeviceUuid(),
-                                    osVersion = DeviceFingerprint.getOsVersion(),
-                                    screenMetrics = DeviceFingerprint.getScreenMetrics(context),
-                                    locale = DeviceFingerprint.getLocale(),
-                                    timezone = DeviceFingerprint.getTimezone(),
-                                    kernelVersion = DeviceFingerprint.getKernelVersion()
-                                )
-                                if (response.isSuccessful) {
-                                    val authData = response.body()
-                                    authData?.access_token?.let {
-                                        sessionManager.saveAuthToken(it)
-                                        authData.user?.let { user ->
-                                            sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
-                                            sessionManager.updateLastLogin()
-                                        }
-                                        onLogin()
-                                        Toast.makeText(context, "Authenticated with token!", Toast.LENGTH_SHORT).show()
-                                    } ?: run {
-                                        errorMessage = "Invalid response from server"
+                        LoginMethod.TOKEN -> {
+                            TokenInputContent(
+                                token = tokenInput,
+                                onTokenChange = { tokenInput = it; errorMessage = null },
+                                isLoading = isTokenLoading,
+                                errorMessage = errorMessage,
+                                onLogin = {
+                                    val trimmed = tokenInput.trim().uppercase()
+                                    if (trimmed.length != 8) {
+                                        errorMessage = "Token must be 8 characters"
+                                    } else {
+                                        authenticateWithToken(trimmed, null)
                                     }
-                                } else {
-                                    errorMessage = "Token auth failed: Invalid or used token"
-                                }
-                            } catch (e: Exception) {
-                                errorMessage = "Cannot reach server. Check your URL."
-                            } finally {
-                                isTokenLoading = false
-                            }
+                                },
+                                onScanClick = launchScanner
+                            )
                         }
-                    },
-                    onSwitchToEmail = { showTokenLogin = false }
-                )
+                        LoginMethod.EMAIL -> {
+                            EmailPasswordContent(
+                                serverUrl = serverUrl,
+                                onUrlChange = onUrlChange,
+                                email = email,
+                                onEmailChange = onEmailChange,
+                                password = password,
+                                onPasswordChange = onPasswordChange,
+                                isLoading = isLoading,
+                                errorMessage = errorMessage,
+                                passwordVisible = passwordVisible,
+                                showAdvanced = showAdvanced,
+                                onToggleAdvanced = { showAdvanced = !showAdvanced },
+                                onTogglePasswordVisibility = { passwordVisible = !passwordVisible },
+                                onLogin = {
+                                    if (email.isBlank()) { errorMessage = "Email is required"; return@EmailPasswordContent }
+                                    if (password.isBlank()) { errorMessage = "Password is required"; return@EmailPasswordContent }
+                                    scope.launch {
+                                        isLoading = true
+                                        errorMessage = null
+                                        try {
+                                            val deviceId = DeviceFingerprint.getCompositeDeviceKey(context)
+                                            val fingerprint = DeviceFingerprint.getFingerprint()
+                                            val response = ApiClient.getPhotoService(context).login(
+                                                email = email,
+                                                password = password,
+                                                deviceName = "${Build.MANUFACTURER} ${Build.MODEL}",
+                                                deviceId = deviceId,
+                                                deviceFingerprint = fingerprint,
+                                                deviceUuid = sessionManager.getDeviceUuid(),
+                                                osVersion = DeviceFingerprint.getOsVersion(),
+                                                screenMetrics = DeviceFingerprint.getScreenMetrics(context),
+                                                locale = DeviceFingerprint.getLocale(),
+                                                timezone = DeviceFingerprint.getTimezone(),
+                                                kernelVersion = DeviceFingerprint.getKernelVersion()
+                                            )
+                                            if (response.isSuccessful) {
+                                                val authData = response.body()
+                                                authData?.access_token?.let {
+                                                    sessionManager.saveAuthToken(it)
+                                                    authData.user?.let { user ->
+                                                        sessionManager.saveUserProfile(user.id, user.email, user.username, user.created_at, user.last_upload)
+                                                        sessionManager.updateLastLogin()
+                                                    }
+                                                    onLogin()
+                                                    Toast.makeText(context, "Welcome back!", Toast.LENGTH_SHORT).show()
+                                                } ?: run {
+                                                    errorMessage = "Invalid response from server"
+                                                }
+                                            } else {
+                                                errorMessage = "Login failed: ${response.message()}"
+                                            }
+                                        } catch (e: Exception) {
+                                            errorMessage = "Cannot reach server. Check your URL."
+                                        } finally {
+                                            isLoading = false
+                                        }
+                                    }
+                                },
+                                onSwitchToQr = { selectedMethod = LoginMethod.QR_SCAN }
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(32.dp))
@@ -1728,7 +1873,190 @@ fun LoginScreen(
 }
 
 @Composable
-private fun LoginCard(
+private fun QrPairingContent(
+    isPairing: Boolean,
+    errorMessage: String?,
+    onScanClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(84.dp)
+                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f), RoundedCornerShape(26.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.QrCodeScanner,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(46.dp)
+            )
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Text(
+            "1-Tap QR Pairing",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Instant onboarding: Configures Server URL & Account simultaneously",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        )
+
+        Spacer(Modifier.height(18.dp))
+
+        // Quick instruction card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Text(
+                    "How to pair with your WebApp:",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("1.", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Open Chege Photos WebApp in browser", style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("2.", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Go to Settings → Access Tokens", style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("3.", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Click Generate Token & scan QR code below", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        ErrorBanner(errorMessage)
+
+        Spacer(Modifier.height(20.dp))
+
+        if (isPairing) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.fillMaxWidth().height(54.dp)
+            ) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.5.dp)
+                Spacer(Modifier.width(12.dp))
+                Text("Pairing device with server…", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            }
+        } else {
+            Button(
+                onClick = onScanClick,
+                modifier = Modifier.fillMaxWidth().height(54.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                Icon(Icons.Default.CameraAlt, contentDescription = null, Modifier.size(22.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("Scan WebApp QR Code", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TokenInputContent(
+    token: String,
+    onTokenChange: (String) -> Unit,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onLogin: () -> Unit,
+    onScanClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            "Manual Token Login",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Enter the 8-character token from your WebApp settings",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+        Spacer(Modifier.height(20.dp))
+
+        OutlinedTextField(
+            value = token,
+            onValueChange = { onTokenChange(it.take(8).uppercase()) },
+            label = { Text("Access Token") },
+            leadingIcon = { Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.primary) },
+            trailingIcon = {
+                IconButton(onClick = onScanClick) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR", tint = MaterialTheme.colorScheme.primary)
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            singleLine = true,
+            placeholder = { Text("e.g. A1B2C3D4") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done)
+        )
+
+        ErrorBanner(errorMessage)
+
+        Spacer(Modifier.height(20.dp))
+
+        Button(
+            onClick = onLogin,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(16.dp),
+            enabled = !isLoading
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp)); Text("Authenticating…")
+            } else {
+                Icon(Icons.Default.Key, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Authenticate Token", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = onScanClick,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Icon(Icons.Default.QrCodeScanner, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Or Scan QR Code Directly")
+        }
+    }
+}
+
+@Composable
+private fun EmailPasswordContent(
     serverUrl: String,
     onUrlChange: (String) -> Unit,
     email: String,
@@ -1742,203 +2070,84 @@ private fun LoginCard(
     onToggleAdvanced: () -> Unit,
     onTogglePasswordVisibility: () -> Unit,
     onLogin: () -> Unit,
-    onSwitchToToken: () -> Unit
+    onSwitchToQr: () -> Unit
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 6.dp,
-        shadowElevation = 12.dp
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text("Sign In", style = MaterialTheme.typography.titleLarge,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface)
-            Spacer(Modifier.height(4.dp))
-            Text("Enter your credentials to continue",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-            Spacer(Modifier.height(24.dp))
+        Text(
+            "Account Sign In",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Enter your email and password to sign in",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+        Spacer(Modifier.height(20.dp))
 
-            ServerSettingsSection(serverUrl, onUrlChange, showAdvanced, onToggleAdvanced)
-            Spacer(Modifier.height(12.dp))
+        ServerSettingsSection(serverUrl, onUrlChange, showAdvanced, onToggleAdvanced)
+        Spacer(Modifier.height(12.dp))
 
-            OutlinedTextField(
-                value = email, onValueChange = onEmailChange,
-                label = { Text("Email") },
-                leadingIcon = { Icon(Icons.Default.Email, null, tint = MaterialTheme.colorScheme.primary) },
-                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next)
-            )
-            Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = email,
+            onEmailChange = onEmailChange,
+            label = { Text("Email") },
+            leadingIcon = { Icon(Icons.Default.Email, null, tint = MaterialTheme.colorScheme.primary) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next)
+        )
+        Spacer(Modifier.height(12.dp))
 
-            OutlinedTextField(
-                value = password, onValueChange = onPasswordChange,
-                label = { Text("Password") },
-                leadingIcon = { Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.primary) },
-                trailingIcon = {
-                    IconButton(onClick = onTogglePasswordVisibility) {
-                        Icon(if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
-                    }
-                },
-                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done)
-            )
-
-            ErrorBanner(errorMessage)
-
-            Spacer(Modifier.height(24.dp))
-
-            Button(
-                onClick = onLogin,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(16.dp), enabled = !isLoading
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp)); Text("Signing in…")
-                } else {
-                    Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Sign In", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        OutlinedTextField(
+            value = password,
+            onValueChange = onPasswordChange,
+            label = { Text("Password") },
+            leadingIcon = { Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.primary) },
+            trailingIcon = {
+                IconButton(onClick = onTogglePasswordVisibility) {
+                    Icon(if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
                 }
-            }
+            },
+            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done)
+        )
 
-            Spacer(Modifier.height(16.dp))
+        ErrorBanner(errorMessage)
 
-            TextButton(onClick = onSwitchToToken) {
-                Icon(Icons.Default.Key, null, Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Login with Token")
+        Spacer(Modifier.height(20.dp))
+
+        Button(
+            onClick = onLogin,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(16.dp),
+            enabled = !isLoading
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp)); Text("Signing in…")
+            } else {
+                Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Sign In", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
         }
-    }
-}
 
-@Composable
-private fun TokenLoginCard(
-    token: String,
-    onTokenChange: (String) -> Unit,
-    isLoading: Boolean,
-    errorMessage: String?,
-    onLogin: () -> Unit,
-    onSwitchToEmail: () -> Unit
-) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val scope = rememberCoroutineScope()
+        Spacer(Modifier.height(12.dp))
 
-    val scanLauncher = rememberLauncherForActivityResult(
-        com.journeyapps.barcodescanner.ScanContract()
-    ) { result ->
-        result.contents?.let { scanned ->
-            val raw = scanned.trim()
-            var parsedUrl: String? = null
-            var parsedToken: String? = null
-
-            if (raw.startsWith("{") && raw.endsWith("}")) {
-                try {
-                    val jsonObj = org.json.JSONObject(raw)
-                    if (jsonObj.has("url")) parsedUrl = jsonObj.getString("url")
-                    if (jsonObj.has("token")) parsedToken = jsonObj.getString("token")
-                } catch (_: Exception) {}
-            }
-
-            if (parsedUrl != null) {
-                val normalized = ApiClient.normalizeUrl(parsedUrl)
-                ApiClient.updateBaseUrl(normalized, context)
-                val sharedPrefs = context.getSharedPreferences("chege_photos_prefs", Context.MODE_PRIVATE)
-                sharedPrefs.edit().putString("server_url", normalized).apply()
-            }
-
-            val finalToken = (parsedToken ?: try {
-                val uri = android.net.Uri.parse(raw)
-                if (uri.host != null) {
-                    uri.getQueryParameter("token")?.uppercase() ?: raw.uppercase()
-                } else {
-                    raw.uppercase()
-                }
-            } catch (_: Exception) {
-                raw.uppercase()
-            }).take(8)
-
-            onTokenChange(finalToken)
-            Toast.makeText(context, if (parsedUrl != null) "Server URL & Token configured!" else "Token scanned!", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 6.dp, shadowElevation = 12.dp
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text("Token Login", style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-            Spacer(Modifier.height(4.dp))
-            Text("Enter the 8-character token from your web settings or scan the QR code",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-            Spacer(Modifier.height(24.dp))
-
-            OutlinedTextField(
-                value = token, onValueChange = { onTokenChange(it.take(8).uppercase()) },
-                label = { Text("Token") },
-                leadingIcon = { Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.primary) },
-                trailingIcon = {
-                    IconButton(onClick = {
-                        val options = com.journeyapps.barcodescanner.ScanOptions().apply {
-                            setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
-                            setPrompt("Scan Chege Photos Token QR Code")
-                            setCameraId(0)
-                            setBeepEnabled(false)
-                            setBarcodeImageEnabled(false)
-                            setCaptureActivity(com.niccher.chege_photos_app.utils.PortraitCaptureActivity::class.java)
-                        }
-                        scanLauncher.launch(options)
-                    }) {
-                        Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR", tint = MaterialTheme.colorScheme.primary)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), singleLine = true,
-                placeholder = { Text("e.g. A1B2C3D4") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done)
-            )
-
-            ErrorBanner(errorMessage)
-
-            Spacer(Modifier.height(24.dp))
-
-            Button(
-                onClick = onLogin,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(16.dp), enabled = !isLoading
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp)); Text("Authenticating…")
-                } else {
-                    Icon(Icons.Default.Key, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Authenticate", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            TextButton(onClick = onSwitchToEmail) {
-                Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Login with Email")
-            }
+        TextButton(onClick = onSwitchToQr) {
+            Icon(Icons.Default.QrCodeScanner, null, Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Quick Pair with QR Code instead")
         }
     }
 }
@@ -3863,11 +4072,12 @@ fun AboutScreen(version: String) {
                     modifier = Modifier.size(80.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Default.PhotoLibrary,
+                        androidx.compose.foundation.Image(
+                            painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_app_icon),
                             contentDescription = null,
-                            modifier = Modifier.size(40.dp),
-                            tint = MaterialTheme.colorScheme.primary
+                            modifier = Modifier
+                                .size(64.dp)
+                                .androidx.compose.ui.draw.clip(RoundedCornerShape(16.dp))
                         )
                     }
                 }
