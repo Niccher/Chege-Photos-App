@@ -2287,27 +2287,7 @@ fun SyncScreen(repository: PhotoRepository) {
     }
 
     val uploadBatch: (List<com.niccher.chege_photos_app.repository.LocalPhoto>, String) -> Unit = { batch, label ->
-        val uris = batch.map { it.uri.toString() }.toTypedArray()
-        val filePaths = batch.map { it.file?.absolutePath ?: "" }.toTypedArray()
-        val names = batch.map { it.name }.toTypedArray()
-        val sizes = batch.map { it.size }.toLongArray()
-
-        val inputData = androidx.work.workDataOf(
-            "uris" to uris,
-            "file_paths" to filePaths,
-            "names" to names,
-            "sizes" to sizes
-        )
-
-        val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.niccher.chege_photos_app.utils.ManualUploadWorker>()
-            .setInputData(inputData)
-            .build()
-
-        workManager.enqueueUniqueWork(
-            "ChegePhotosManualUpload",
-            androidx.work.ExistingWorkPolicy.REPLACE,
-            workRequest
-        )
+        com.niccher.chege_photos_app.utils.ManualUploadWorker.enqueue(context, batch)
     }
 
     PullToRefreshBox(
@@ -2331,7 +2311,18 @@ fun SyncScreen(repository: PhotoRepository) {
                 modifier = Modifier.weight(1f),
                 enabled = !isSyncing && filteredPhotos.isNotEmpty(),
                 onClick = {
-                    uploadBatch(targetPhotos, if (selectedIndices.isNotEmpty()) "selected" else "local")
+                    if (selectedIndices.isEmpty()) {
+                        val syncRequest = androidx.work.OneTimeWorkRequestBuilder<com.niccher.chege_photos_app.utils.SyncWorker>()
+                            .build()
+                        workManager.enqueueUniqueWork(
+                            "ChegePhotosSync",
+                            androidx.work.ExistingWorkPolicy.KEEP,
+                            syncRequest
+                        )
+                        android.widget.Toast.makeText(context, "Background sync started for ${filteredPhotos.size} photos...", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        uploadBatch(targetPhotos, "selected")
+                    }
                 }
             ) {
                 val label = if (selectedIndices.isNotEmpty()) "Upload Selected (${selectedIndices.size})"
@@ -3080,27 +3071,18 @@ fun SharedUploadDialog(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         enabled = !isUploading,
                         onClick = {
-                            val uris = files.map { android.net.Uri.fromFile(it).toString() }.toTypedArray()
-                            val filePaths = files.map { it.absolutePath }.toTypedArray()
-                            val names = files.map { it.name }.toTypedArray()
-                            val sizes = files.map { it.length() }.toLongArray()
-
-                            val inputData = androidx.work.workDataOf(
-                                "uris" to uris,
-                                "file_paths" to filePaths,
-                                "names" to names,
-                                "sizes" to sizes,
-                                "album_id" to selectedAlbum?.id
-                            )
-
-                            val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.niccher.chege_photos_app.utils.ManualUploadWorker>()
-                                .setInputData(inputData)
-                                .build()
-
-                            workManager.enqueueUniqueWork(
-                                "ChegePhotosManualUpload",
-                                androidx.work.ExistingWorkPolicy.REPLACE,
-                                workRequest
+                            val localPhotos = files.map { file ->
+                                com.niccher.chege_photos_app.repository.LocalPhoto(
+                                    uri = android.net.Uri.fromFile(file),
+                                    file = file,
+                                    name = file.name,
+                                    size = file.length()
+                                )
+                            }
+                            com.niccher.chege_photos_app.utils.ManualUploadWorker.enqueue(
+                                context = context,
+                                photos = localPhotos,
+                                albumId = selectedAlbum?.id
                             )
                         }
                     ) {
