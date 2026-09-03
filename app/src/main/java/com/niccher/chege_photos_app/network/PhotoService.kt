@@ -10,6 +10,9 @@ import retrofit2.http.*
 
 interface PhotoService {
 
+    @GET("api/v1/config")
+    suspend fun getServerConfig(): Response<com.niccher.chege_photos_app.models.ServerConfigResponse>
+
     @GET("api/v1/test")
     suspend fun ping(): Response<ResponseBody>
 
