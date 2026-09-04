@@ -29,12 +29,17 @@ class SyncWorker(
         }
 
         return try {
-            val localPhotos = repository.getLocalPhotos()
+            val allPhotos = repository.getLocalPhotos()
+            val allowedFolders = sessionManager.getBackupFolders()
+            val localPhotos = allPhotos.filter {
+                !it.isUploaded && (allowedFolders.isEmpty() || it.folderName in allowedFolders)
+            }
             val total = localPhotos.size
             val totalBytes = localPhotos.sumOf { it.size }
-            Log.d("SyncWorker", "Found $total local photos ($totalBytes bytes) to sync.")
+            Log.d("SyncWorker", "Found $total fresh local photos ($totalBytes bytes) to sync (out of ${allPhotos.size} total).")
             
             if (total == 0) {
+                Log.d("SyncWorker", "No fresh photos require auto-sync. All photos up to date.")
                 return Result.success()
             }
 

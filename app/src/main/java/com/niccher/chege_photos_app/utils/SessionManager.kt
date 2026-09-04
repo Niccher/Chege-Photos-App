@@ -105,6 +105,14 @@ class SessionManager(private val context: Context) {
         prefs.edit().putBoolean("backup_only_charging", onlyCharging).apply()
     }
 
+    fun getBackupFolders(): Set<String> {
+        return prefs.getStringSet("backup_selected_folders", emptySet()) ?: emptySet()
+    }
+
+    fun setBackupFolders(folders: Set<String>) {
+        prefs.edit().putStringSet("backup_selected_folders", folders).apply()
+    }
+
     fun saveServerConfig(config: com.niccher.chege_photos_app.models.ServerConfigData) {
         prefs.edit()
             .putInt(KEY_CONFIG_MAX_UPLOAD_MB, config.max_upload_size_mb)

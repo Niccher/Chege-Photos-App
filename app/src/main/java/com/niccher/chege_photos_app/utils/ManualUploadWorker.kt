@@ -13,6 +13,14 @@ import java.io.File
 import com.niccher.chege_photos_app.showUploadNotification
 
 
+import android.os.PowerManager
+import android.content.pm.ServiceInfo
+import androidx.work.ForegroundInfo
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import androidx.work.OutOfQuotaPolicy
+import com.niccher.chege_photos_app.formatFileSize
+
 class ManualUploadWorker(
     private val context: Context,
     workerParams: WorkerParameters
@@ -52,8 +60,14 @@ class ManualUploadWorker(
                 "total_bytes" to totalBytes
             )
 
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
             val workRequest = androidx.work.OneTimeWorkRequestBuilder<ManualUploadWorker>()
                 .setInputData(inputData)
+                .setConstraints(constraints)
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build()
 
             androidx.work.WorkManager.getInstance(context).enqueueUniqueWork(
@@ -65,237 +79,331 @@ class ManualUploadWorker(
         }
     }
 
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        val totalBytes = inputData.getLong("total_bytes", 0L)
+        val bucketName = inputData.getString("bucket_name") ?: "Photos"
+        return createForegroundInfo(
+            current = 0,
+            total = 0,
+            uploadedBytes = 0L,
+            totalBytes = totalBytes,
+            currentFileName = null,
+            bucketName = bucketName
+        )
+    }
+
+    private fun createForegroundInfo(
+        current: Int,
+        total: Int,
+        uploadedBytes: Long,
+        totalBytes: Long,
+        currentFileName: String?,
+        bucketName: String?
+    ): ForegroundInfo {
+        val channelId = "chege_photos_sync_v2"
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val systemNotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+            if (systemNotificationManager != null && systemNotificationManager.getNotificationChannel(channelId) == null) {
+                val channel = android.app.NotificationChannel(
+                    channelId,
+                    "Photo Sync",
+                    android.app.NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Live notifications for photo uploads and background sync"
+                    setShowBadge(false)
+                }
+                systemNotificationManager.createNotificationChannel(channel)
+            }
+        }
+
+        val percentage = if (totalBytes > 0) {
+            ((uploadedBytes.toDouble() / totalBytes) * 100).toInt().coerceIn(0, 100)
+        } else if (total > 0) {
+            ((current.toDouble() / total) * 100).toInt().coerceIn(0, 100)
+        } else 0
+
+        val targetLabel = if (!bucketName.isNullOrBlank() && bucketName != "All") bucketName else "Photos"
+        val bytesInfo = if (totalBytes > 0) {
+            val remainingBytes = (totalBytes - uploadedBytes).coerceAtLeast(0L)
+            "${formatFileSize(uploadedBytes)} of ${formatFileSize(totalBytes)} (${formatFileSize(remainingBytes)} left)"
+        } else {
+            "$percentage%"
+        }
+        val fileDetail = if (!currentFileName.isNullOrBlank()) " • $currentFileName" else ""
+
+        val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(com.niccher.chege_photos_app.R.drawable.ic_sync_notification)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentTitle(if (total > 0) "Syncing $targetLabel ($current of $total)" else "Preparing sync for $targetLabel...")
+            .setContentText("$bytesInfo$fileDetail")
+            .setSubText("$percentage%")
+            .setProgress(100, percentage, false)
+            .build()
+
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            ForegroundInfo(
+                1001,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            ForegroundInfo(1001, notification)
+        }
+    }
+
     override suspend fun doWork(): Result {
         Log.d(TAG, "Starting manual background upload worker...")
+
+        try {
+            setForeground(getForegroundInfo())
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to setForeground for upload worker: ${e.message}")
+        }
+
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ChegePhotos:ManualUploadWakeLock")?.apply {
+            setReferenceCounted(false)
+            acquire(60 * 60 * 1000L) // 1 hour max safety limit
+        }
 
         val sessionManager = SessionManager(context)
         if (!sessionManager.isLoggedIn()) {
             Log.d(TAG, "User not logged in. Aborting manual upload.")
+            try { if (wakeLock?.isHeld == true) wakeLock.release() } catch (_: Exception) {}
             return Result.failure()
         }
 
-        val photosToUpload = mutableListOf<LocalPhoto>()
-        val queueFilePath = inputData.getString("queue_file")
-        val albumId = inputData.getString("album_id")
-        val bucketName = inputData.getString("bucket_name") ?: "Photos"
+        try {
+            val photosToUpload = mutableListOf<LocalPhoto>()
+            val queueFilePath = inputData.getString("queue_file")
+            val albumId = inputData.getString("album_id")
+            val bucketName = inputData.getString("bucket_name") ?: "Photos"
 
-        if (queueFilePath != null) {
-            val qFile = File(queueFilePath)
-            if (qFile.exists()) {
-                try {
-                    val content = qFile.readText()
-                    val jsonArray = org.json.JSONArray(content)
-                    for (i in 0 until jsonArray.length()) {
-                        val obj = jsonArray.getJSONObject(i)
-                        val uriStr = obj.optString("uri")
-                        val pathStr = obj.optString("filePath").takeIf { it.isNotBlank() }
-                        val name = obj.optString("name", "photo_$i.jpg")
-                        val size = obj.optLong("size", 0L)
-                        val folder = obj.optString("folder", "Other")
-                        photosToUpload.add(
-                            LocalPhoto(
-                                uri = Uri.parse(uriStr),
-                                file = pathStr?.let { File(it) },
-                                name = name,
-                                size = size,
-                                folderName = folder
+            if (queueFilePath != null) {
+                val qFile = File(queueFilePath)
+                if (qFile.exists()) {
+                    try {
+                        val content = qFile.readText()
+                        val jsonArray = org.json.JSONArray(content)
+                        for (i in 0 until jsonArray.length()) {
+                            val obj = jsonArray.getJSONObject(i)
+                            val uriStr = obj.optString("uri")
+                            val pathStr = obj.optString("filePath").takeIf { it.isNotBlank() }
+                            val name = obj.optString("name", "photo_$i.jpg")
+                            val size = obj.optLong("size", 0L)
+                            val folder = obj.optString("folder", "Other")
+                            photosToUpload.add(
+                                LocalPhoto(
+                                    uri = Uri.parse(uriStr),
+                                    file = pathStr?.let { File(it) },
+                                    name = name,
+                                    size = size,
+                                    folderName = folder
+                                )
                             )
-                        )
+                        }
+                        // Clean up temporary queue file
+                        qFile.delete()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to parse queue file: ${e.message}", e)
                     }
-                    // Clean up temporary queue file
-                    qFile.delete()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse queue file: ${e.message}", e)
                 }
             }
-        }
 
-        // Fallback for direct array parameters (legacy / small payloads)
-        if (photosToUpload.isEmpty()) {
-            val uris = inputData.getStringArray("uris") ?: emptyArray()
-            val filePaths = inputData.getStringArray("file_paths") ?: emptyArray()
-            val names = inputData.getStringArray("names") ?: emptyArray()
-            val sizes = inputData.getLongArray("sizes") ?: longArrayOf()
-            for (i in uris.indices) {
-                val uriStr = uris[i]
-                val pathStr = filePaths.getOrNull(i)
-                val name = names.getOrNull(i) ?: "photo_$i.jpg"
-                val size = sizes.getOrNull(i) ?: 0L
-                photosToUpload.add(
-                    LocalPhoto(
-                        uri = Uri.parse(uriStr),
-                        file = if (!pathStr.isNullOrBlank()) File(pathStr) else null,
-                        name = name,
-                        size = size
+            // Fallback for direct array parameters (legacy / small payloads)
+            if (photosToUpload.isEmpty()) {
+                val uris = inputData.getStringArray("uris") ?: emptyArray()
+                val filePaths = inputData.getStringArray("file_paths") ?: emptyArray()
+                val names = inputData.getStringArray("names") ?: emptyArray()
+                val sizes = inputData.getLongArray("sizes") ?: longArrayOf()
+                for (i in uris.indices) {
+                    val uriStr = uris[i]
+                    val pathStr = filePaths.getOrNull(i)
+                    val name = names.getOrNull(i) ?: "photo_$i.jpg"
+                    val size = sizes.getOrNull(i) ?: 0L
+                    photosToUpload.add(
+                        LocalPhoto(
+                            uri = Uri.parse(uriStr),
+                            file = if (!pathStr.isNullOrBlank()) File(pathStr) else null,
+                            name = name,
+                            size = size
+                        )
                     )
-                )
-            }
-        }
-
-        val total = photosToUpload.size
-        if (total == 0) {
-            Log.d(TAG, "No photos provided to upload.")
-            return Result.success()
-        }
-
-        val totalBytes = inputData.getLong("total_bytes", photosToUpload.sumOf { it.size }).let {
-            if (it <= 0L) photosToUpload.sumOf { p -> p.size } else it
-        }
-
-        Log.d(TAG, "Queueing upload of $total manual items ($totalBytes bytes) for bucket: $bucketName.")
-        val repository = PhotoRepository(context)
-        if (!repository.isServerReachable()) {
-            Log.w(TAG, "Server is currently unreachable. Pausing manual upload.")
-            return Result.retry()
-        }
-
-        var successCount = 0
-        var failedCount = 0
-        var consecutiveNetworkFailures = 0
-        var uploadedBytes = 0L
-        
-        // Show initial notification
-        showUploadNotification(
-            context = context,
-            current = 0,
-            total = total,
-            uploadedBytes = 0L,
-            totalBytes = totalBytes,
-            isFinished = false,
-            failedCount = 0,
-            currentFileName = null,
-            bucketName = bucketName
-        )
-
-        for ((i, localPhoto) in photosToUpload.withIndex()) {
-            if (isStopped) {
-                Log.d(TAG, "Upload worker was stopped/cancelled.")
-                val unattempted = (total - (successCount + failedCount)).coerceAtLeast(0)
-                showUploadNotification(
-                    context = context,
-                    current = successCount,
-                    total = total,
-                    uploadedBytes = uploadedBytes,
-                    totalBytes = totalBytes,
-                    isFinished = true,
-                    failedCount = failedCount + unattempted,
-                    bucketName = bucketName
-                )
-                return Result.failure()
+                }
             }
 
-            val name = localPhoto.name
-            val photoSize = localPhoto.size
+            val total = photosToUpload.size
+            if (total == 0) {
+                Log.d(TAG, "No photos provided to upload.")
+                return Result.success()
+            }
 
-            // Update progress in database / state
-            setProgress(workDataOf(
-                "current" to (successCount + failedCount),
-                "total" to total,
-                "progress" to if (totalBytes > 0) (uploadedBytes.toFloat() / totalBytes) else (i.toFloat() / total),
-                "current_name" to name,
-                "status" to "uploading"
-            ))
+            val totalBytes = inputData.getLong("total_bytes", photosToUpload.sumOf { it.size }).let {
+                if (it <= 0L) photosToUpload.sumOf { p -> p.size } else it
+            }
 
-            // Show updated notification for current item
+            Log.d(TAG, "Queueing upload of $total manual items ($totalBytes bytes) for bucket: $bucketName.")
+            val repository = PhotoRepository(context)
+            if (!repository.isServerReachable()) {
+                Log.w(TAG, "Server is currently unreachable. Pausing manual upload.")
+                return Result.retry()
+            }
+
+            var successCount = 0
+            var failedCount = 0
+            var consecutiveNetworkFailures = 0
+            var uploadedBytes = 0L
+            
+            // Show initial notification
             showUploadNotification(
                 context = context,
-                current = i + 1,
+                current = 0,
                 total = total,
-                uploadedBytes = uploadedBytes,
+                uploadedBytes = 0L,
                 totalBytes = totalBytes,
                 isFinished = false,
-                failedCount = failedCount,
-                currentFileName = name,
+                failedCount = 0,
+                currentFileName = null,
                 bucketName = bucketName
             )
 
-            // Sync the photo
-            var lastProgressNotifyTime = 0L
-            val syncResult = repository.syncPhoto(localPhoto, albumId = albumId) { progress ->
-                val inProgressBytes = (photoSize * progress).toLong()
-                val liveBytes = uploadedBytes + inProgressBytes
-                val overallProgress = if (totalBytes > 0) (liveBytes.toFloat() / totalBytes) else (i.toFloat() + progress) / total
-                setProgressAsync(workDataOf(
+            for ((i, localPhoto) in photosToUpload.withIndex()) {
+                if (isStopped) {
+                    Log.d(TAG, "Upload worker was stopped/cancelled.")
+                    val unattempted = (total - (successCount + failedCount)).coerceAtLeast(0)
+                    showUploadNotification(
+                        context = context,
+                        current = successCount,
+                        total = total,
+                        uploadedBytes = uploadedBytes,
+                        totalBytes = totalBytes,
+                        isFinished = true,
+                        failedCount = failedCount + unattempted,
+                        bucketName = bucketName
+                    )
+                    return Result.failure()
+                }
+
+                val name = localPhoto.name
+                val photoSize = localPhoto.size
+
+                // Update progress in database / state
+                setProgress(workDataOf(
                     "current" to (successCount + failedCount),
                     "total" to total,
-                    "progress" to overallProgress,
+                    "progress" to if (totalBytes > 0) (uploadedBytes.toFloat() / totalBytes) else (i.toFloat() / total),
                     "current_name" to name,
                     "status" to "uploading"
                 ))
-                // Throttle notification calls during stream to prevent Android rate-limiting (shedding)
-                val now = System.currentTimeMillis()
-                if (now - lastProgressNotifyTime >= 600L) {
-                    lastProgressNotifyTime = now
-                    showUploadNotification(
-                        context = context,
-                        current = i + 1,
-                        total = total,
-                        uploadedBytes = liveBytes,
-                        totalBytes = totalBytes,
-                        isFinished = false,
-                        failedCount = failedCount,
-                        currentFileName = name,
-                        bucketName = bucketName
-                    )
-                }
-            }
 
-            if (syncResult is PhotoSyncResult.Success) {
-                successCount++
-                uploadedBytes += photoSize
-                consecutiveNetworkFailures = 0
-                sessionManager.updateLastUpload()
-            } else {
-                failedCount++
-                val errMsg = (syncResult as? PhotoSyncResult.Error)?.message ?: "Unknown error"
-                Log.e(TAG, "Failed to sync photo $name ($failedCount failed so far): $errMsg")
-                
-                val isNetworkDown = errMsg.contains("ConnectException", ignoreCase = true) ||
-                                   errMsg.contains("UnknownHostException", ignoreCase = true) ||
-                                   errMsg.contains("SocketTimeoutException", ignoreCase = true)
-                if (isNetworkDown) {
-                    consecutiveNetworkFailures++
-                    if (consecutiveNetworkFailures >= 3) {
-                        Log.w(TAG, "3 consecutive network dropouts. Pausing batch to retry later.")
-                        val unattempted = (total - (successCount + failedCount)).coerceAtLeast(0)
+                // Show updated notification for current item
+                showUploadNotification(
+                    context = context,
+                    current = i + 1,
+                    total = total,
+                    uploadedBytes = uploadedBytes,
+                    totalBytes = totalBytes,
+                    isFinished = false,
+                    failedCount = failedCount,
+                    currentFileName = name,
+                    bucketName = bucketName
+                )
+
+                // Sync the photo
+                var lastProgressNotifyTime = 0L
+                val syncResult = repository.syncPhoto(localPhoto, albumId = albumId) { progress ->
+                    val inProgressBytes = (photoSize * progress).toLong()
+                    val liveBytes = uploadedBytes + inProgressBytes
+                    val overallProgress = if (totalBytes > 0) (liveBytes.toFloat() / totalBytes) else (i.toFloat() + progress) / total
+                    setProgressAsync(workDataOf(
+                        "current" to (successCount + failedCount),
+                        "total" to total,
+                        "progress" to overallProgress,
+                        "current_name" to name,
+                        "status" to "uploading"
+                    ))
+                    val now = System.currentTimeMillis()
+                    if (now - lastProgressNotifyTime >= 600L) {
+                        lastProgressNotifyTime = now
                         showUploadNotification(
                             context = context,
-                            current = successCount,
+                            current = i + 1,
                             total = total,
-                            uploadedBytes = uploadedBytes,
+                            uploadedBytes = liveBytes,
                             totalBytes = totalBytes,
-                            isFinished = true,
-                            failedCount = failedCount + unattempted,
+                            isFinished = false,
+                            failedCount = failedCount,
+                            currentFileName = name,
                             bucketName = bucketName
                         )
-                        return Result.retry()
                     }
-                } else {
+                }
+
+                if (syncResult is PhotoSyncResult.Success) {
+                    successCount++
+                    uploadedBytes += photoSize
                     consecutiveNetworkFailures = 0
+                    sessionManager.updateLastUpload()
+                } else {
+                    failedCount++
+                    val errMsg = (syncResult as? PhotoSyncResult.Error)?.message ?: "Unknown error"
+                    Log.e(TAG, "Failed to sync photo $name ($failedCount failed so far): $errMsg")
+                    
+                    val isNetworkDown = errMsg.contains("ConnectException", ignoreCase = true) ||
+                                       errMsg.contains("UnknownHostException", ignoreCase = true) ||
+                                       errMsg.contains("SocketTimeoutException", ignoreCase = true)
+                    if (isNetworkDown) {
+                        consecutiveNetworkFailures++
+                        if (consecutiveNetworkFailures >= 3) {
+                            Log.w(TAG, "3 consecutive network dropouts. Pausing batch to retry later.")
+                            val unattempted = (total - (successCount + failedCount)).coerceAtLeast(0)
+                            showUploadNotification(
+                                context = context,
+                                current = successCount,
+                                total = total,
+                                uploadedBytes = uploadedBytes,
+                                totalBytes = totalBytes,
+                                isFinished = true,
+                                failedCount = failedCount + unattempted,
+                                bucketName = bucketName
+                            )
+                            return Result.retry()
+                        }
+                    } else {
+                        consecutiveNetworkFailures = 0
+                    }
                 }
             }
-        }
 
-        // Show finished notification with exact success and failure counts
-        showUploadNotification(
-            context = context,
-            current = successCount,
-            total = total,
-            uploadedBytes = uploadedBytes,
-            totalBytes = totalBytes,
-            isFinished = true,
-            failedCount = failedCount,
-            bucketName = bucketName
-        )
-        
-        Log.d(TAG, "Background upload complete: $successCount succeeded, $failedCount failed out of $total items.")
-        
-        return Result.success(workDataOf(
-            "succeeded" to successCount,
-            "failed" to failedCount,
-            "total" to total,
-            "uploaded_bytes" to uploadedBytes,
-            "total_bytes" to totalBytes
-        ))
+            // Show finished notification with exact success and failure counts
+            showUploadNotification(
+                context = context,
+                current = successCount,
+                total = total,
+                uploadedBytes = uploadedBytes,
+                totalBytes = totalBytes,
+                isFinished = true,
+                failedCount = failedCount,
+                bucketName = bucketName
+            )
+            
+            Log.d(TAG, "Background upload complete: $successCount succeeded, $failedCount failed out of $total items.")
+            
+            return Result.success(workDataOf(
+                "succeeded" to successCount,
+                "failed" to failedCount,
+                "total" to total,
+                "uploaded_bytes" to uploadedBytes,
+                "total_bytes" to totalBytes
+            ))
+        } finally {
+            try {
+                if (wakeLock?.isHeld == true) {
+                    wakeLock.release()
+                }
+            } catch (_: Exception) {}
+        }
     }
 }

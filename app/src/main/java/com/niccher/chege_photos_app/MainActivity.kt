@@ -102,6 +102,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
@@ -159,6 +160,7 @@ class MainActivity : FragmentActivity() {
         val constraints = androidx.work.Constraints.Builder()
             .setRequiredNetworkType(netType)
             .setRequiresCharging(sessionManager.isBackupOnlyCharging())
+            .setRequiresBatteryNotLow(true)
             .build()
 
         val syncWorkRequest = androidx.work.PeriodicWorkRequestBuilder<com.niccher.chege_photos_app.utils.SyncWorker>(
@@ -573,6 +575,14 @@ fun MainScreen(
                             modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "v$appVersion",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
                 }
             }
         }
@@ -613,64 +623,57 @@ fun MainScreen(
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+                            .navigationBarsPadding()
+                            .padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
                         shape = RoundedCornerShape(24.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
                         tonalElevation = 8.dp,
                         shadowElevation = 8.dp
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 12.dp, bottom = 4.dp, start = 16.dp, end = 16.dp),
-                                horizontalArrangement = Arrangement.SpaceAround,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Screen.values().forEach { screen ->
-                                    val selected = currentScreen == screen
-                                    val iconColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                    
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        modifier = Modifier.clickable(
-                                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                                            indication = null,
-                                            onClick = { currentScreen = screen }
-                                        )
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .background(
-                                                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                                    shape = RoundedCornerShape(16.dp)
-                                                )
-                                                .padding(horizontal = 20.dp, vertical = 6.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                painter = androidx.compose.ui.res.painterResource(id = screen.iconResId),
-                                                contentDescription = screen.title,
-                                                tint = iconColor,
-                                                modifier = Modifier.size(24.dp)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceAround,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Screen.values().forEach { screen ->
+                                val selected = currentScreen == screen
+                                val iconColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.clickable(
+                                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                        indication = null,
+                                        onClick = { currentScreen = screen }
+                                    )
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(
+                                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                                shape = RoundedCornerShape(16.dp)
                                             )
-                                        }
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = screen.title, 
-                                            style = MaterialTheme.typography.labelSmall, 
-                                            fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium,
-                                            color = iconColor
+                                            .padding(horizontal = 20.dp, vertical = 6.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            painter = androidx.compose.ui.res.painterResource(id = screen.iconResId),
+                                            contentDescription = screen.title,
+                                            tint = iconColor,
+                                            modifier = Modifier.size(24.dp)
                                         )
                                     }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = screen.title, 
+                                        style = MaterialTheme.typography.labelSmall, 
+                                        fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium,
+                                        color = iconColor
+                                    )
                                 }
                             }
-                            Text(
-                                text = "v$appVersion",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.padding(bottom = 6.dp)
-                            )
                         }
                     }
                 }
@@ -790,8 +793,44 @@ fun RemotePhotoListScreen(
     // Search / type filter / client-side pagination
     var searchQuery by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf("All") }
+    var showFilterMenu by remember { mutableStateOf(false) }
     var visibleCount by remember { mutableStateOf(REMOTE_PAGE_SIZE) }
     val gridState = rememberLazyGridState()
+
+    var selectedPersonId by remember { mutableStateOf<Int?>(null) }
+    var gridColumns by remember { mutableIntStateOf(3) }
+    var semanticSearchResults by remember { mutableStateOf<List<Photo>?>(null) }
+    var isSemanticSearching by remember { mutableStateOf(false) }
+
+    if (selectedPersonId != null) {
+        PersonPhotosScreen(
+            baseUrl = baseUrl,
+            personId = selectedPersonId!!,
+            onBack = { selectedPersonId = null }
+        )
+        return
+    }
+
+    LaunchedEffect(searchQuery) {
+        val q = searchQuery.trim()
+        if (q.length >= 2) {
+            delay(400)
+            isSemanticSearching = true
+            try {
+                val resp = ApiClient.getPhotoService(context).getRemotePhotos(query = q)
+                if (resp.isSuccessful) {
+                    semanticSearchResults = resp.body()?.photos
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Semantic search error: ${e.message}")
+            } finally {
+                isSemanticSearching = false
+            }
+        } else {
+            semanticSearchResults = null
+            isSemanticSearching = false
+        }
+    }
 
     LaunchedEffect(title) {
         isLoading = true
@@ -816,20 +855,24 @@ fun RemotePhotoListScreen(
         onPhotosLoaded?.invoke(photos.size)
     }
 
-    val filteredPhotos = remember(photos, searchQuery, typeFilter) {
+    val activePhotoList = semanticSearchResults ?: photos
+    val filteredPhotos = remember(activePhotoList, searchQuery, typeFilter, semanticSearchResults) {
         val query = searchQuery.trim()
-        photos.filter { photo ->
-            val matchesQuery = query.isEmpty() ||
+        activePhotoList.filter { photo ->
+            val matchesQuery = if (semanticSearchResults != null) true else (
+                query.isEmpty() ||
                 photo.filename.contains(query, ignoreCase = true) ||
                 photo.path.contains(query, ignoreCase = true)
+            )
+            val isVideo = photo.mime_type?.contains("video", ignoreCase = true) == true ||
+                photo.mime_type?.contains("mp4", ignoreCase = true) == true ||
+                photo.filename.endsWith(".mp4", ignoreCase = true) ||
+                photo.filename.endsWith(".webm", ignoreCase = true) ||
+                photo.filename.endsWith(".mkv", ignoreCase = true) ||
+                photo.filename.endsWith(".mov", ignoreCase = true)
             val matchesType = when (typeFilter) {
-                "JPG" -> photo.mime_type?.contains("jpeg", ignoreCase = true) == true ||
-                    photo.filename.endsWith(".jpg", ignoreCase = true) ||
-                    photo.filename.endsWith(".jpeg", ignoreCase = true)
-                "PNG" -> photo.mime_type?.contains("png", ignoreCase = true) == true ||
-                    photo.filename.endsWith(".png", ignoreCase = true)
-                "MP4" -> photo.mime_type?.contains("mp4", ignoreCase = true) == true ||
-                    photo.filename.endsWith(".mp4", ignoreCase = true)
+                "Images" -> !isVideo
+                "Videos" -> isVideo
                 else -> true
             }
             matchesQuery && matchesType
@@ -837,7 +880,7 @@ fun RemotePhotoListScreen(
     }
 
     // Reset pagination when the query or type filter changes
-    LaunchedEffect(searchQuery, typeFilter) {
+    LaunchedEffect(searchQuery, typeFilter, semanticSearchResults) {
         visibleCount = REMOTE_PAGE_SIZE
         gridState.scrollToItem(0)
     }
@@ -957,9 +1000,72 @@ fun RemotePhotoListScreen(
             placeholder = { Text("Search photos") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Default.Close, contentDescription = "Clear search")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                        }
+                    }
+                    IconButton(onClick = {
+                        gridColumns = when (gridColumns) {
+                            2 -> 3
+                            3 -> 4
+                            else -> 2
+                        }
+                    }) {
+                        Icon(
+                            imageVector = when (gridColumns) {
+                                2 -> Icons.Default.ViewStream
+                                3 -> Icons.Default.GridView
+                                else -> Icons.Default.ViewCompact
+                            },
+                            contentDescription = "Switch grid density ($gridColumns columns)",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Box {
+                        IconButton(onClick = { showFilterMenu = true }) {
+                            Icon(
+                                imageVector = Icons.Default.FilterList,
+                                contentDescription = "Filter media by type",
+                                tint = if (typeFilter != "All") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showFilterMenu,
+                            onDismissRequest = { showFilterMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("All") },
+                                onClick = {
+                                    typeFilter = "All"
+                                    showFilterMenu = false
+                                },
+                                leadingIcon = if (typeFilter == "All") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Images") },
+                                onClick = {
+                                    typeFilter = "Images"
+                                    showFilterMenu = false
+                                },
+                                leadingIcon = if (typeFilter == "Images") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Videos") },
+                                onClick = {
+                                    typeFilter = "Videos"
+                                    showFilterMenu = false
+                                },
+                                leadingIcon = if (typeFilter == "Videos") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                        }
                     }
                 }
             },
@@ -969,22 +1075,21 @@ fun RemotePhotoListScreen(
             singleLine = true
         )
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf("All", "JPG", "PNG", "MP4").forEach { t ->
-                FilterChip(
-                    selected = typeFilter == t,
-                    onClick = { typeFilter = t },
-                    label = { Text(t) }
-                )
-            }
+        if (isSemanticSearching) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            )
         }
-        Spacer(modifier = Modifier.height(4.dp))
+
+        if ((title == "Gallery" || title == "Explore") && searchQuery.isEmpty()) {
+            PeopleAvatarRow(
+                baseUrl = baseUrl,
+                coilImageLoader = coilImageLoader,
+                onPersonClick = { selectedPersonId = it }
+            )
+        }
 
         PullToRefreshBox(
             isRefreshing = isRefreshing,
@@ -1014,7 +1119,7 @@ fun RemotePhotoListScreen(
                     }
                 } else {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
+                        columns = GridCells.Fixed(gridColumns),
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(4.dp),
                         state = gridState
@@ -2286,14 +2391,17 @@ fun SyncScreen(repository: PhotoRepository) {
         listOf("All") + photos.map { it.folderName }.distinct().sorted()
     }
 
-    val filteredPhotos = remember(photos, selectedFolder) {
+    val folderFilteredPhotos = remember(photos, selectedFolder) {
         if (selectedFolder == "All") photos else photos.filter { it.folderName == selectedFolder }
     }
 
+    val freshCount = remember(folderFilteredPhotos) { folderFilteredPhotos.count { !it.isUploaded } }
+    val displayedPhotos = folderFilteredPhotos
+
     val targetPhotos = if (selectedIndices.isNotEmpty()) {
-        selectedIndices.sorted().map { filteredPhotos.getOrNull(it) }.filterNotNull()
+        selectedIndices.sorted().mapNotNull { displayedPhotos.getOrNull(it) }
     } else {
-        filteredPhotos
+        folderFilteredPhotos.filter { !it.isUploaded }
     }
 
     val uploadBatch: (List<com.niccher.chege_photos_app.repository.LocalPhoto>, String) -> Unit = { batch, label ->
@@ -2323,15 +2431,22 @@ fun SyncScreen(repository: PhotoRepository) {
         ) {
             Button(
                 modifier = Modifier.weight(1f),
-                enabled = !isSyncing && filteredPhotos.isNotEmpty(),
+                enabled = !isSyncing && targetPhotos.isNotEmpty(),
                 onClick = {
                     uploadBatch(targetPhotos, if (selectedIndices.isNotEmpty()) "selected" else "folder_${selectedFolder}")
                 }
             ) {
-                val label = if (selectedIndices.isNotEmpty()) "Upload Selected (${selectedIndices.size})"
-                            else if (isSyncing) "Syncing $selectedFolder... ($processedCount/${targetPhotos.size})"
-                            else if (selectedFolder != "All") "Sync $selectedFolder (${filteredPhotos.size})"
-                            else "Sync All (${filteredPhotos.size})"
+                val label = if (selectedIndices.isNotEmpty()) {
+                    "Upload Selected (${selectedIndices.size})"
+                } else if (isSyncing) {
+                    "Syncing $selectedFolder... ($processedCount/${targetPhotos.size.coerceAtLeast(1)})"
+                } else if (freshCount == 0 && folderFilteredPhotos.isNotEmpty()) {
+                    "All $selectedFolder Synced ✓"
+                } else if (selectedFolder != "All") {
+                    "Sync $selectedFolder ($freshCount fresh)"
+                } else {
+                    "Sync All ($freshCount fresh)"
+                }
                 Text(label)
             }
 
@@ -2381,7 +2496,6 @@ fun SyncScreen(repository: PhotoRepository) {
         }
 
         // ── Progress ──────────────────────────────────────────────
-        // ── Progress ──────────────────────────────────────────────
         if (isSyncing) {
             Column(modifier = Modifier.padding(vertical = 8.dp)) {
                 LinearProgressIndicator(
@@ -2414,93 +2528,121 @@ fun SyncScreen(repository: PhotoRepository) {
         }
 
         // ── Photo grid ────────────────────────────────────────────
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(4.dp)
-        ) {
-            itemsIndexed(
-                items = filteredPhotos,
-                key = { _, photo -> photo.uri.toString() }
-            ) { index, photo ->
-                val isSelected = index in selectedIndices
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(4.dp)
-                        .combinedClickable(
-                            onClick = {
-                                if (selectedIndices.isNotEmpty()) {
-                                    selectedIndices = if (isSelected) selectedIndices - index else selectedIndices + index
-                                } else {
-                                    selectedPhotoIndex = index
-                                }
-                            },
-                            onLongClick = {
-                                selectedIndices = selectedIndices + index
-                            }
-                        ),
-                    colors = if (isSelected) CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    ) else CardDefaults.cardColors()
+        if (displayedPhotos.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Box {
-                        AsyncImage(
-                            model = photo.uri,
-                            contentDescription = photo.name,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(150.dp),
-                            contentScale = ContentScale.Crop
-                        )
-                        
-                        // Folder label tag overlay
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(4.dp),
-                            color = Color.Black.copy(alpha = 0.6f),
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(
-                                text = photo.folderName,
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                                maxLines = 1
+                    Icon(
+                        imageVector = Icons.Default.CloudQueue,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Text(
+                        text = "No photos found in $selectedFolder.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(4.dp)
+            ) {
+                itemsIndexed(
+                    items = displayedPhotos,
+                    key = { _, photo -> photo.uri.toString() }
+                ) { index, photo ->
+                    val isSelected = index in selectedIndices
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(4.dp)
+                            .combinedClickable(
+                                onClick = {
+                                    if (selectedIndices.isNotEmpty()) {
+                                        selectedIndices = if (isSelected) selectedIndices - index else selectedIndices + index
+                                    } else {
+                                        selectedPhotoIndex = index
+                                    }
+                                },
+                                onLongClick = {
+                                    selectedIndices = selectedIndices + index
+                                }
+                            ),
+                        colors = if (isSelected) CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        ) else CardDefaults.cardColors()
+                    ) {
+                        Box {
+                            AsyncImage(
+                                model = photo.uri,
+                                contentDescription = photo.name,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(150.dp),
+                                contentScale = ContentScale.Crop
+                            )
+
+                            // Folder label tag overlay
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(4.dp),
+                                color = Color.Black.copy(alpha = 0.6f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = photo.folderName,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                    maxLines = 1
+                                )
+                            }
+
+                            // Checkbox overlay when selected
+                            if (isSelected) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(6.dp)
+                                        .size(28.dp)
+                                        .background(
+                                            color = MaterialTheme.colorScheme.primary,
+                                            shape = CircleShape
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Check, contentDescription = "Selected",
+                                        tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+
+                        // Per-item Sync Progress (only for items in the current sync target batch)
+                        val isCurrentlySyncing = currentlySyncingName == photo.name
+                        val isTargetPhoto = targetPhotos.contains(photo)
+                        if (isCurrentlySyncing || (isSyncing && isTargetPhoto && photo in targetPhotos.take(processedCount))) {
+                            val progress = if (isCurrentlySyncing) currentFileProgress else 1f
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth().height(6.dp),
+                                color = if (progress < 1f) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50),
+                                strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
                             )
                         }
 
-                        // Checkbox overlay when selected
-                        if (isSelected) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.TopStart)
-                                    .padding(6.dp)
-                                    .size(28.dp)
-                                    .background(
-                                        color = MaterialTheme.colorScheme.primary,
-                                        shape = CircleShape
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Default.Check, contentDescription = "Selected",
-                                    tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
-                            }
-                        }
                     }
-
-                    // Per-item Sync Progress
-                    if (currentlySyncingName == photo.name || isSyncing && photo in photos.take(processedCount)) {
-                        val progress = if (currentlySyncingName == photo.name) currentFileProgress else 1f
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier.fillMaxWidth().height(6.dp),
-                            color = if (progress < 1f) MaterialTheme.colorScheme.primary else Color.Green,
-                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
-                        )
-                    }
-
                 }
             }
         }
@@ -2518,7 +2660,8 @@ fun SyncScreen(repository: PhotoRepository) {
                     .fillMaxSize()
                     .background(Color.Black)
             ) {
-                val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { filteredPhotos.size })
+                val safeInitialPage = initialPage.coerceAtMost((displayedPhotos.size - 1).coerceAtLeast(0))
+                val pagerState = rememberPagerState(initialPage = safeInitialPage, pageCount = { displayedPhotos.size })
                 var showInfoSheet by remember { mutableStateOf(false) }
 
                 // Reset state on swipe
@@ -2530,7 +2673,7 @@ fun SyncScreen(repository: PhotoRepository) {
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
-                    val photo = filteredPhotos[page]
+                    val photo = displayedPhotos.getOrNull(page) ?: return@HorizontalPager
                     var scale by remember { mutableStateOf(1f) }
                     var offset by remember { mutableStateOf(Offset.Zero) }
 
@@ -2606,7 +2749,7 @@ fun SyncScreen(repository: PhotoRepository) {
                         shape = RoundedCornerShape(16.dp)
                     ) {
                         Text(
-                            text = "${pagerState.currentPage + 1} of ${filteredPhotos.size}",
+                            text = "${pagerState.currentPage + 1} of ${displayedPhotos.size}",
                             color = Color.White,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                             style = MaterialTheme.typography.bodyMedium
@@ -2615,25 +2758,27 @@ fun SyncScreen(repository: PhotoRepository) {
                 }
 
                 if (showInfoSheet) {
-                    val currentPhoto = filteredPhotos[pagerState.currentPage]
-                    val tempPhoto = Photo(
-                        filename = currentPhoto.name,
-                        path = currentPhoto.uri.toString(),
-                        size = currentPhoto.size.toString(),
-                        taken_at = currentPhoto.file?.let { file ->
-                            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(file.lastModified()))
-                        } ?: java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
-                        mime_type = if (currentPhoto.name.lowercase().endsWith(".jpg") || currentPhoto.name.lowercase().endsWith(".jpeg")) "image/jpeg" 
-                                    else if (currentPhoto.name.lowercase().endsWith(".png")) "image/png"
-                                    else if (currentPhoto.name.lowercase().endsWith(".mp4")) "video/mp4"
-                                    else "image/unknown"
-                    )
-                    PhotoDetailsBottomSheet(
-                        photo = tempPhoto,
-                        localFile = currentPhoto.file,
-                        onPhotoDeleted = { selectedPhotoIndex = null },
-                        onDismiss = { showInfoSheet = false }
-                    )
+                    val currentPhoto = displayedPhotos.getOrNull(pagerState.currentPage)
+                    if (currentPhoto != null) {
+                        val tempPhoto = Photo(
+                            filename = currentPhoto.name,
+                            path = currentPhoto.uri.toString(),
+                            size = currentPhoto.size.toString(),
+                            taken_at = currentPhoto.file?.let { file ->
+                                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(file.lastModified()))
+                            } ?: java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
+                            mime_type = if (currentPhoto.name.lowercase().endsWith(".jpg") || currentPhoto.name.lowercase().endsWith(".jpeg")) "image/jpeg" 
+                                        else if (currentPhoto.name.lowercase().endsWith(".png")) "image/png"
+                                        else if (currentPhoto.name.lowercase().endsWith(".mp4")) "video/mp4"
+                                        else "image/unknown"
+                        )
+                        PhotoDetailsBottomSheet(
+                            photo = tempPhoto,
+                            localFile = currentPhoto.file,
+                            onPhotoDeleted = { selectedPhotoIndex = null },
+                            onDismiss = { showInfoSheet = false }
+                        )
+                    }
                 }
             }
         }
@@ -3324,6 +3469,79 @@ fun ProfileScreen(sessionManager: com.niccher.chege_photos_app.utils.SessionMana
                             sessionManager.setBackupOnlyCharging(it)
                             chargingOnlyChecked = it
                             (context as? MainActivity)?.scheduleBackgroundSync()
+                        }
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = "Current Device Status",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                val batteryIntent = remember(context) {
+                    context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                }
+                val isCharging = remember(batteryIntent) {
+                    val status = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
+                    status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
+                }
+                val batteryPct = remember(batteryIntent) {
+                    val level = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                    val scale = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+                    if (level >= 0 && scale > 0) (level * 100 / scale) else 100
+                }
+                val connectivityManager = remember(context) {
+                    context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                }
+                val isWifi = remember(connectivityManager) {
+                    val net = connectivityManager?.activeNetwork
+                    val caps = connectivityManager?.getNetworkCapabilities(net)
+                    caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AssistChip(
+                        onClick = {},
+                        label = { Text(if (batteryPct <= 15) "Low Battery ($batteryPct%)" else "Battery Guard ($batteryPct%)", style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = {
+                            Icon(
+                                if (batteryPct <= 15) Icons.Default.BatteryAlert else Icons.Default.BatteryChargingFull,
+                                contentDescription = null,
+                                tint = if (batteryPct <= 15) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    )
+                    AssistChip(
+                        onClick = {},
+                        label = { Text(if (isWifi) "Wi-Fi Active" else "Cellular Network", style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = {
+                            Icon(
+                                if (isWifi) Icons.Default.Wifi else Icons.Default.WifiOff,
+                                contentDescription = null,
+                                tint = if (isWifi) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    )
+                    AssistChip(
+                        onClick = {},
+                        label = { Text(if (isCharging) "Charging ✓" else "On Battery", style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Power,
+                                contentDescription = null,
+                                tint = if (isCharging) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
                         }
                     )
                 }
@@ -4408,7 +4626,8 @@ fun FaceSearchScreen(baseUrl: String) {
     if (selectedPersonId != null) {
         PersonPhotosScreen(
             baseUrl = baseUrl,
-            personId = selectedPersonId!!
+            personId = selectedPersonId!!,
+            onBack = { selectedPersonId = null }
         )
         return
     }
@@ -4549,11 +4768,118 @@ fun FaceSearchScreen(baseUrl: String) {
     }
 }
 
+@Composable
+fun PeopleAvatarRow(
+    baseUrl: String,
+    coilImageLoader: coil.ImageLoader,
+    onPersonClick: (Int) -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var persons by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.PersonData>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val resp = ApiClient.getPhotoService(context).getPersons()
+            if (resp.isSuccessful) {
+                persons = resp.body()?.persons ?: emptyList()
+            }
+        } catch (_: Exception) {}
+    }
+
+    if (persons.isNotEmpty()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "People & Pets",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "${persons.size}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(persons, key = { it.id }) { person ->
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clickable { onPersonClick(person.id) }
+                            .width(64.dp)
+                    ) {
+                        val thumb = person.thumbnail
+                        val imgUrl = if (thumb != null) {
+                            if (thumb.thumbnail_path?.startsWith("/") == true || thumb.thumbnail_path?.startsWith("content:") == true || thumb.path.startsWith("/") || thumb.path.startsWith("content:")) {
+                                thumb.thumbnail_path ?: thumb.path
+                            } else {
+                                baseUrl.trimEnd('/') + "/" + (thumb.thumbnail_path ?: thumb.path).trimStart('/')
+                            }
+                        } else null
+
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (imgUrl != null) {
+                                AsyncImage(
+                                    model = imgUrl,
+                                    contentDescription = person.name ?: "Person",
+                                    imageLoader = coilImageLoader,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = person.name?.ifBlank { "Person" } ?: "Person",
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PersonPhotosScreen(
     baseUrl: String,
-    personId: Int
+    personId: Int,
+    onBack: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var photos by remember { mutableStateOf<List<com.niccher.chege_photos_app.models.PersonPhoto>>(emptyList()) }
@@ -4579,10 +4905,30 @@ fun PersonPhotosScreen(
         modifier = Modifier
             .fillMaxSize()
     ) {
+        if (onBack != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+                Text(
+                    text = "Person Photos",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
         if (loading) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         } else if (photos.isEmpty()) {
-            Text("No photos found.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No photos found.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+            }
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),

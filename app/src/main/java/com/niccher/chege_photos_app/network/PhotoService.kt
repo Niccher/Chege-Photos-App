@@ -48,7 +48,9 @@ interface PhotoService {
     ): Response<AuthResponse>
 
     @GET("api/v1/photos")
-    suspend fun getRemotePhotos(): Response<PhotoListResponse>
+    suspend fun getRemotePhotos(
+        @Query("q") query: String? = null
+    ): Response<PhotoListResponse>
 
     @GET("api/v1/albums")
     suspend fun getAlbums(): Response<com.niccher.chege_photos_app.models.AlbumListResponse>

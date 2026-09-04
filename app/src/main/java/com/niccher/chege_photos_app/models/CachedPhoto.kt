@@ -62,5 +62,5 @@ fun Photo.toCachedPhoto() = CachedPhoto(
     album_id = album_id?.toIntOrNull(),
     created_at = created_at,
     updated_at = updated_at,
-    sha256 = null // Populated client-side
+    sha256 = file_hash
 )

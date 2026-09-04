@@ -27,8 +27,44 @@ interface PhotoDao {
     @Query("SELECT * FROM cached_photos WHERE sha256 = :sha256 LIMIT 1")
     suspend fun getPhotoBySha256(sha256: String): CachedPhoto?
 
+    @Query("SELECT sha256 FROM cached_photos WHERE sha256 IS NOT NULL")
+    suspend fun getAllCachedSha256(): List<String>
+
+    @Query("SELECT filename FROM cached_photos")
+    suspend fun getAllCachedFilenames(): List<String>
+
     @Query("DELETE FROM cached_photos WHERE id = :id")
     suspend fun deleteById(id: String)
+}
+
+@Entity(tableName = "local_sync_records")
+data class LocalSyncRecord(
+    @PrimaryKey val mediaUri: String,
+    val sha256: String? = null,
+    val isUploaded: Boolean = false,
+    val size: Long = 0L,
+    val dateModified: Long = 0L
+)
+
+@Dao
+interface LocalSyncDao {
+    @Query("SELECT * FROM local_sync_records")
+    suspend fun getAllRecords(): List<LocalSyncRecord>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRecords(records: List<LocalSyncRecord>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRecord(record: LocalSyncRecord)
+
+    @Query("UPDATE local_sync_records SET isUploaded = 1, sha256 = :sha256 WHERE mediaUri = :uri")
+    suspend fun markAsUploaded(uri: String, sha256: String?)
+
+    @Query("SELECT * FROM local_sync_records WHERE mediaUri = :uri LIMIT 1")
+    suspend fun getRecordByUri(uri: String): LocalSyncRecord?
+
+    @Query("DELETE FROM local_sync_records")
+    suspend fun clearAll()
 }
 
 @Dao
@@ -43,10 +79,11 @@ interface OfflineActionDao {
     suspend fun deleteActionById(localId: Long)
 }
 
-@Database(entities = [CachedPhoto::class, OfflineAction::class], version = 5, exportSchema = false)
+@Database(entities = [CachedPhoto::class, OfflineAction::class, LocalSyncRecord::class], version = 6, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
     abstract fun offlineActionDao(): OfflineActionDao
+    abstract fun localSyncDao(): LocalSyncDao
 
     companion object {
         @Volatile
@@ -104,13 +141,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS local_sync_records (" +
+                        "mediaUri TEXT NOT NULL PRIMARY KEY, " +
+                        "sha256 TEXT, " +
+                        "isUploaded INTEGER NOT NULL DEFAULT 0, " +
+                        "size INTEGER NOT NULL DEFAULT 0, " +
+                        "dateModified INTEGER NOT NULL DEFAULT 0)"
+                )
+            }
+        }
+
         fun getDatabase(context: android.content.Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "photo_database"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
                 instance

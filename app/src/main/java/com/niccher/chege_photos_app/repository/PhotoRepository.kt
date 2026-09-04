@@ -32,12 +32,15 @@ data class LocalPhoto(
     val file: File?,
     val name: String,
     val size: Long,
-    val folderName: String = "Other"
+    val folderName: String = "Other",
+    val isUploaded: Boolean = false,
+    val sha256: String? = null
 )
 
 class PhotoRepository(private val context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val photoDao = database.photoDao()
+    private val localSyncDao = database.localSyncDao()
     private val offlineActionDao = database.offlineActionDao()
 
     companion object {
@@ -72,6 +75,17 @@ class PhotoRepository(private val context: Context) {
 
     suspend fun getLocalPhotos(): List<LocalPhoto> = withContext(Dispatchers.IO) {
         val photos = mutableListOf<LocalPhoto>()
+        val cachedSha256Set = try {
+            photoDao.getAllCachedSha256().filter { it.isNotBlank() }.toHashSet()
+        } catch (_: Exception) {
+            emptySet<String>()
+        }
+        val syncRecordsMap = try {
+            localSyncDao.getAllRecords().associateBy { it.mediaUri }
+        } catch (_: Exception) {
+            emptyMap<String, com.niccher.chege_photos_app.data.LocalSyncRecord>()
+        }
+
         val projection = arrayOf(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DATA,
@@ -129,8 +143,20 @@ class PhotoRepository(private val context: Context) {
 
                 val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                 val file = if (path != null) File(path) else null
+                val uriStr = uri.toString()
+                val record = syncRecordsMap[uriStr]
+                val isUploaded = record?.isUploaded == true || (record?.sha256 != null && record.sha256 in cachedSha256Set)
+
                 if (file?.exists() == true || path != null) {
-                    photos.add(LocalPhoto(uri, file, displayName, fileSize, folder))
+                    photos.add(LocalPhoto(
+                        uri = uri,
+                        file = file,
+                        name = displayName,
+                        size = fileSize,
+                        folderName = folder,
+                        isUploaded = isUploaded,
+                        sha256 = record?.sha256
+                    ))
                 }
             }
         }
@@ -258,6 +284,7 @@ class PhotoRepository(private val context: Context) {
                 val cached = photoDao.getPhotoBySha256(sha256)
                 if (cached != null) {
                     Log.i(tag, "Photo ${photo.name} matches local cached hash, skipping upload.")
+                    localSyncDao.markAsUploaded(photo.uri.toString(), sha256)
                     return@withContext PhotoSyncResult.Success
                 }
 
@@ -266,7 +293,7 @@ class PhotoRepository(private val context: Context) {
                     val checkResponse = ApiClient.getPhotoService(context).checkPhotoExistsByHash(sha256)
                     if (checkResponse.isSuccessful && checkResponse.body()?.status == "success") {
                         Log.i(tag, "Photo ${photo.name} matches server hash, skipping upload.")
-                        // Cache it locally so we don't request the server next time
+                        localSyncDao.markAsUploaded(photo.uri.toString(), sha256)
                         return@withContext PhotoSyncResult.Success
                     }
                 } catch (e: Exception) {
@@ -353,7 +380,9 @@ class PhotoRepository(private val context: Context) {
                             Log.w(tag, "Failed to cache uploaded photo locally: ${e.message}")
                         }
                     }
-                    
+
+                    localSyncDao.markAsUploaded(photo.uri.toString(), sha256)
+                    photosRefreshTrigger.tryEmit(Unit)
                     PhotoSyncResult.Success
                 } else {
                     val errMsg = authResponse?.messageText ?: "Unknown error"

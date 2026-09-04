@@ -22,7 +22,8 @@ data class Photo(
     val is_favorite: String? = null,
     val is_deleted: String? = null,
     val created_at: String? = null,
-    val updated_at: String? = null
+    val updated_at: String? = null,
+    val file_hash: String? = null
 )
 
 @Serializable
