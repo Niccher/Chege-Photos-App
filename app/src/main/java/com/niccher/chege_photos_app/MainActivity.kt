@@ -762,6 +762,23 @@ fun RemotePhotoListScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    // State for Fullscreen Carousel
+    var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
+    var isSelectionMode by remember { mutableStateOf(false) }
+    val selectedPhotos = remember { mutableStateListOf<Photo>() }
+    var showAlbumPicker by remember { mutableStateOf(false) }
+    var albumPickerAlbums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
+
+    // Search / type filter / client-side pagination
+    var searchQuery by remember { mutableStateOf("") }
+    var typeFilter by remember { mutableStateOf("All") }
+    var showFilterMenu by remember { mutableStateOf(false) }
+    var currentSort by remember { mutableStateOf("date_desc") }
+    var showSortMenu by remember { mutableStateOf(false) }
+    var showMetadataChips by remember { mutableStateOf(false) }
+    var visibleCount by remember { mutableStateOf(REMOTE_PAGE_SIZE) }
+    val gridState = rememberLazyGridState()
+
     val refreshData = {
         scope.launch {
             isRefreshing = true
@@ -787,23 +804,6 @@ fun RemotePhotoListScreen(
             isRefreshing = false
         }
     }
-    
-    // State for Fullscreen Carousel
-    var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
-    var isSelectionMode by remember { mutableStateOf(false) }
-    val selectedPhotos = remember { mutableStateListOf<Photo>() }
-    var showAlbumPicker by remember { mutableStateOf(false) }
-    var albumPickerAlbums by remember { mutableStateOf(listOf<PhotoAlbum>()) }
-
-    // Search / type filter / client-side pagination
-    var searchQuery by remember { mutableStateOf("") }
-    var typeFilter by remember { mutableStateOf("All") }
-    var showFilterMenu by remember { mutableStateOf(false) }
-    var currentSort by remember { mutableStateOf("date_desc") }
-    var showSortMenu by remember { mutableStateOf(false) }
-    var showMetadataChips by remember { mutableStateOf(false) }
-    var visibleCount by remember { mutableStateOf(REMOTE_PAGE_SIZE) }
-    val gridState = rememberLazyGridState()
 
     LaunchedEffect(currentSort) {
         if (fetchPhotos == null) {
@@ -1297,10 +1297,13 @@ fun RemotePhotoListScreen(
                                         }
                                     }
                                     if (showMetadataChips) {
-                                        val mpText = if (photo.width != null && photo.height != null) {
-                                            String.format(java.util.Locale.US, "%.1f MP", (photo.width.toLong() * photo.height.toLong()) / 1000000.0)
-                                        } else "Video"
-                                        val sizeMb = String.format(java.util.Locale.US, "%.1f MB", (photo.size ?: 0L) / 1024.0 / 1024.0)
+                                        val w = photo.width?.toLongOrNull() ?: 0L
+                                        val h = photo.height?.toLongOrNull() ?: 0L
+                                        val mpText = if (w > 0 && h > 0) {
+                                            String.format(java.util.Locale.US, "%.1f MP", (w * h) / 1000000.0)
+                                        } else "Media"
+                                        val sizeBytes = photo.size?.toLongOrNull() ?: 0L
+                                        val sizeMb = String.format(java.util.Locale.US, "%.1f MB", sizeBytes / 1024.0 / 1024.0)
                                         Surface(
                                             modifier = Modifier
                                                 .align(Alignment.BottomStart)
