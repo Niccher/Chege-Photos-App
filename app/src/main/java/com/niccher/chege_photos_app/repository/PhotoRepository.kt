@@ -210,9 +210,9 @@ class PhotoRepository(private val context: Context) {
         return photoDao.getAllPhotos().map { list -> list.map { it.toPhoto() } }
     }
 
-    suspend fun getRemotePhotos(): List<Photo> {
+    suspend fun getRemotePhotos(sort: String? = null): List<Photo> {
         return try {
-            val response = ApiClient.getPhotoService(context).getRemotePhotos()
+            val response = ApiClient.getPhotoService(context).getRemotePhotos(sort = sort)
             if (response.isSuccessful) {
                 val remotePhotos = response.body()?.photos ?: emptyList()
                 photoDao.clearAll()

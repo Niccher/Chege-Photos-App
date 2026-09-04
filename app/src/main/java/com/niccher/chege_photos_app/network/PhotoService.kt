@@ -49,7 +49,8 @@ interface PhotoService {
 
     @GET("api/v1/photos")
     suspend fun getRemotePhotos(
-        @Query("q") query: String? = null
+        @Query("q") query: String? = null,
+        @Query("sort") sort: String? = null
     ): Response<PhotoListResponse>
 
     @GET("api/v1/albums")

@@ -774,7 +774,12 @@ fun RemotePhotoListScreen(
                 }
             } else {
                 try {
-                    repository.getRemotePhotos()
+                    val resp = ApiClient.getPhotoService(context).getRemotePhotos(sort = currentSort)
+                    if (resp.isSuccessful) {
+                        remotePhotos = resp.body()?.photos ?: emptyList()
+                    } else {
+                        repository.getRemotePhotos(sort = currentSort)
+                    }
                 } catch (e: Exception) {
                     Log.e("MainActivity", "Failed to refresh remote photos: ${e.message}")
                 }
@@ -794,8 +799,26 @@ fun RemotePhotoListScreen(
     var searchQuery by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf("All") }
     var showFilterMenu by remember { mutableStateOf(false) }
+    var currentSort by remember { mutableStateOf("date_desc") }
+    var showSortMenu by remember { mutableStateOf(false) }
+    var showMetadataChips by remember { mutableStateOf(false) }
     var visibleCount by remember { mutableStateOf(REMOTE_PAGE_SIZE) }
     val gridState = rememberLazyGridState()
+
+    LaunchedEffect(currentSort) {
+        if (fetchPhotos == null) {
+            isLoading = true
+            try {
+                val resp = ApiClient.getPhotoService(context).getRemotePhotos(sort = currentSort)
+                if (resp.isSuccessful) {
+                    remotePhotos = resp.body()?.photos ?: emptyList()
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to sort remote photos: ${e.message}")
+            }
+            isLoading = false
+        }
+    }
 
     var selectedPersonId by remember { mutableStateOf<Int?>(null) }
     var gridColumns by remember { mutableIntStateOf(3) }
@@ -1067,6 +1090,88 @@ fun RemotePhotoListScreen(
                             )
                         }
                     }
+                    Box {
+                        IconButton(onClick = { showSortMenu = true }) {
+                            Icon(
+                                imageVector = Icons.Default.SwapVert,
+                                contentDescription = "Sort photos & options",
+                                tint = if (currentSort != "date_desc" || showMetadataChips) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showSortMenu,
+                            onDismissRequest = { showSortMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Date (Newest First)") },
+                                onClick = { currentSort = "date_desc"; showSortMenu = false },
+                                leadingIcon = if (currentSort == "date_desc") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Date (Oldest First)") },
+                                onClick = { currentSort = "date_asc"; showSortMenu = false },
+                                leadingIcon = if (currentSort == "date_asc") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Recently Uploaded") },
+                                onClick = { currentSort = "upload_desc"; showSortMenu = false },
+                                leadingIcon = if (currentSort == "upload_desc") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            DropdownMenuItem(
+                                text = { Text("File Size (Largest)") },
+                                onClick = { currentSort = "size_desc"; showSortMenu = false },
+                                leadingIcon = if (currentSort == "size_desc") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            DropdownMenuItem(
+                                text = { Text("File Size (Smallest)") },
+                                onClick = { currentSort = "size_asc"; showSortMenu = false },
+                                leadingIcon = if (currentSort == "size_asc") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Resolution (Highest MP)") },
+                                onClick = { currentSort = "resolution_desc"; showSortMenu = false },
+                                leadingIcon = if (currentSort == "resolution_desc") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Name (A to Z)") },
+                                onClick = { currentSort = "name_asc"; showSortMenu = false },
+                                leadingIcon = if (currentSort == "name_asc") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Favorites First") },
+                                onClick = { currentSort = "favorites"; showSortMenu = false },
+                                leadingIcon = if (currentSort == "favorites") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+                                } else null
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text(if (showMetadataChips) "Hide Info Badges" else "Show Info Badges") },
+                                onClick = { showMetadataChips = !showMetadataChips; showSortMenu = false },
+                                leadingIcon = {
+                                    Icon(
+                                        if (showMetadataChips) Icons.Default.VisibilityOff else Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = if (showMetadataChips) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            )
+                        }
+                    }
                 }
             },
             modifier = Modifier
@@ -1188,6 +1293,26 @@ fun RemotePhotoListScreen(
                                                 contentDescription = null,
                                                 modifier = Modifier.padding(4.dp).size(16.dp),
                                                 tint = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        }
+                                    }
+                                    if (showMetadataChips) {
+                                        val mpText = if (photo.width != null && photo.height != null) {
+                                            String.format(java.util.Locale.US, "%.1f MP", (photo.width.toLong() * photo.height.toLong()) / 1000000.0)
+                                        } else "Video"
+                                        val sizeMb = String.format(java.util.Locale.US, "%.1f MB", (photo.size ?: 0L) / 1024.0 / 1024.0)
+                                        Surface(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomStart)
+                                                .fillMaxWidth(),
+                                            color = Color(0x99000000)
+                                        ) {
+                                            Text(
+                                                text = "$mpText • $sizeMb",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color.White,
+                                                maxLines = 1,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                             )
                                         }
                                     }
