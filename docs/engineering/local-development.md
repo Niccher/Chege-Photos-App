@@ -20,13 +20,13 @@ This guide walks through configuring a local Android development workstation, sy
 
 ### Clone Repository
 ```bash
-cd /home/niccher/AndroidStudioProjects/Chege_Photos_App
+cd path/to/Chege_Photos_App
 ```
 
 ### Configure Local Properties
 If not already created, configure your Android SDK path in `local.properties`:
 ```properties
-sdk.dir=/home/niccher/Android/Sdk
+sdk.dir=/path/to/Android/Sdk
 ```
 
 ### Verify Gradle Sync & Compile

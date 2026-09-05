@@ -49,6 +49,9 @@ captures/
 # Google Services configuration
 google-services.json
 
+# Agent and AI assistant configurations & skills
+.agents/
+
 # OS and Temporary files
 .DS_Store
 Thumbs.db

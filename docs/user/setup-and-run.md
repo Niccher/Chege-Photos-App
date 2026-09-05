@@ -20,7 +20,7 @@ This guide explains how to build, install, and run the Chege Photos Android appl
 ## 1. Build from Android Studio
 
 1. Open Android Studio.
-2. Select **File → Open** and navigate to `/home/niccher/AndroidStudioProjects/Chege_Photos_App`.
+2. Select **File → Open** and choose the `Chege_Photos_App` project directory.
 3. Wait for Gradle sync to download plugins and libraries defined in `gradle/libs.versions.toml`.
 4. Select your target device/emulator from the device dropdown.
 5. Click the **Run** button (green play icon `▶`) or press `Shift + F10`.
@@ -33,7 +33,7 @@ You can build and install the debug APK entirely via the command line:
 
 ### A. Compile Debug APK
 ```bash
-cd /home/niccher/AndroidStudioProjects/Chege_Photos_App
+cd path/to/Chege_Photos_App
 ./gradlew assembleDebug
 ```
 
