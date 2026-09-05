@@ -23,7 +23,8 @@ Native Kotlin Android companion application for the Chege Photos self-hosted pho
 * **Android Studio**: Ladybug (2024.2+) or Meerkat (2024.3+)
 * **Java Development Kit (JDK)**: JDK 17 or JDK 21
 * **Android Target**: Android 10+ (API level 29 or higher)
-* **Backend**: Reachable instance of [Chege Photos WebApp](https://github.com/niccher/Chege-Photos-WebApp)
+* **Backend**: Running instance of [Chege Photos WebApp](https://github.com/niccher/Chege-Photos-WebApp) (e.g. `http://10.0.2.2:9005` for emulators, or LAN IP for physical devices).  
+  *(Note: The Android app talks exclusively to the WebApp; it does not connect directly to the ML microservice — the WebApp coordinates all AI indexing behind the scenes).*
 
 ---
 
@@ -89,6 +90,27 @@ For architecture, Room database schemas, streaming upload pipelines, and develop
 * [Local Development & Gradle Tasks](docs/engineering/local-development.md)
 * [Making Changes & Definition of Done](docs/engineering/making-changes.md)
 * [Testing Guide](docs/engineering/testing.md)
+
+---
+
+## Ecosystem & Multi-Repo Architecture
+
+```
+[ Chege Photos Android ]
+         │
+         │ (HTTPS / Bearer Token - port 9005)
+         ▼
+[ Chege Photos WebApp ] (Port 9005) ─── MySQL 8.4 (Port 9306)
+         │
+         │ (Internal HTTP / X-API-KEY - port 9051)
+         ▼
+[ ML Chege Photos ] (Port 9051) ─────── Qdrant Vector DB (Port 9052)
+```
+
+### Architecture for Android Developers
+* **Direct Connection**: The Android companion client communicates **only with the WebApp**.
+* **Zero Direct ML Dependency**: Android never needs direct network access or credentials for the ML microservice or Qdrant vector database.
+* **Coordinated Features**: All ML-powered capabilities (face groupings, smart albums, CLIP semantic search) are requested through WebApp REST endpoints (`/api/v1/...`), which orchestrates them transparently.
 
 ---
 
