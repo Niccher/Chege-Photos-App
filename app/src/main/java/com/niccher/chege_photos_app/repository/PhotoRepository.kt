@@ -309,14 +309,12 @@ class PhotoRepository(private val context: Context) {
                 } else requestBody
                 MultipartBody.Part.createFormData("file", photo.name, monitoredBody)
             } else {
-                Log.v(tag, "Reading from content URI")
-                val bytes = context.contentResolver.openInputStream(photo.uri)?.use { it.readBytes() }
-                    ?: run {
-                        Log.e(tag, "Failed to read input stream for ${photo.uri}")
-                        return@withContext PhotoSyncResult.Error("Failed to read input stream for ${photo.uri}")
-                    }
-                Log.v(tag, "Read ${bytes.size} bytes from URI")
-                val requestBody = bytes.toRequestBody(mime.toMediaTypeOrNull())
+                Log.v(tag, "Streaming from content URI: ${photo.uri}")
+                val requestBody = com.niccher.chege_photos_app.utils.ContentUriRequestBody(
+                    context.contentResolver,
+                    photo.uri,
+                    mime.toMediaTypeOrNull()
+                )
                 val monitoredBody = if (onProgress != null) {
                     com.niccher.chege_photos_app.utils.ProgressRequestBody(requestBody, onProgress)
                 } else requestBody

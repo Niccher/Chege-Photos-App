@@ -10,7 +10,7 @@ object HashUtils {
         return try {
             val digest = MessageDigest.getInstance("SHA-256")
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                val buffer = ByteArray(8192)
+                val buffer = ByteArray(65536)
                 var bytesRead = inputStream.read(buffer)
                 while (bytesRead != -1) {
                     digest.update(buffer, 0, bytesRead)

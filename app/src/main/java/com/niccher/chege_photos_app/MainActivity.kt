@@ -1510,6 +1510,8 @@ fun RemotePhotoListScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black)
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
             ) {
                 val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { filteredPhotos.size })
                 var showInfoSheet by remember { mutableStateOf(false) }
@@ -2787,6 +2789,8 @@ fun SyncScreen(repository: PhotoRepository) {
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black)
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
             ) {
                 val safeInitialPage = initialPage.coerceAtMost((displayedPhotos.size - 1).coerceAtLeast(0))
                 val pagerState = rememberPagerState(initialPage = safeInitialPage, pageCount = { displayedPhotos.size })
