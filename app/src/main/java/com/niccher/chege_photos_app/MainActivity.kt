@@ -164,7 +164,8 @@ class MainActivity : FragmentActivity() {
             .build()
 
         val syncWorkRequest = androidx.work.PeriodicWorkRequestBuilder<com.niccher.chege_photos_app.utils.SyncWorker>(
-            1, java.util.concurrent.TimeUnit.DAYS
+            15, java.util.concurrent.TimeUnit.MINUTES,
+            5, java.util.concurrent.TimeUnit.MINUTES
         )
             .setConstraints(constraints)
             .build()
@@ -174,7 +175,41 @@ class MainActivity : FragmentActivity() {
             androidx.work.ExistingPeriodicWorkPolicy.REPLACE, // Update constraints if they changed
             syncWorkRequest
         )
-        Log.d("MainActivity", "Scheduled background auto-backup with current constraints.")
+        Log.d("MainActivity", "Scheduled background auto-backup (15m interval) with current constraints.")
+    }
+
+    fun triggerImmediateBackup() {
+        val sessionManager = SessionManager(this)
+        val workManager = androidx.work.WorkManager.getInstance(applicationContext)
+
+        val netType = if (sessionManager.isBackupOnlyWifi()) {
+            androidx.work.NetworkType.UNMETERED
+        } else {
+            androidx.work.NetworkType.CONNECTED
+        }
+
+        val constraints = androidx.work.Constraints.Builder()
+            .setRequiredNetworkType(netType)
+            .build()
+
+        val oneTimeSync = androidx.work.OneTimeWorkRequestBuilder<com.niccher.chege_photos_app.utils.SyncWorker>()
+            .setConstraints(constraints)
+            .build()
+
+        workManager.enqueueUniqueWork(
+            "ChegePhotosImmediateSync",
+            androidx.work.ExistingWorkPolicy.REPLACE,
+            oneTimeSync
+        )
+        Log.d("MainActivity", "Enqueued immediate camera backup work.")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val sessionManager = SessionManager(this)
+        if (sessionManager.isLoggedIn() && sessionManager.isBackupAutoEnabled()) {
+            triggerImmediateBackup()
+        }
     }
 
     private fun scheduleOfflineActionsSync() {
@@ -3603,6 +3638,62 @@ fun ProfileScreen(sessionManager: com.niccher.chege_photos_app.utils.SessionMana
                             (context as? MainActivity)?.scheduleBackgroundSync()
                         }
                     )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Button(
+                    onClick = {
+                        (context as? MainActivity)?.triggerImmediateBackup()
+                        android.widget.Toast.makeText(context, "Immediate backup enqueued in background", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Cloud,
+                        contentDescription = "Backup Now",
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = "Backup Now")
+                }
+
+                val powerManager = remember(context) {
+                    context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+                }
+                val isIgnoringOptimizations = remember(context) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+                    } else true
+                }
+
+                if (!isIgnoringOptimizations) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedButton(
+                        onClick = {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                                try {
+                                    val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                        data = android.net.Uri.parse("package:${context.packageName}")
+                                    }
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    val intent = android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                    context.startActivity(intent)
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Battery Optimization",
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = "Unrestrict Background Backup", fontSize = 12.sp)
+                    }
                 }
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

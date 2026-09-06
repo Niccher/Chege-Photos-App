@@ -87,76 +87,84 @@ class PhotoRepository(private val context: Context) {
         }
 
         val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DATA,
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.SIZE,
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DATA,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.SIZE,
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME
+                MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
             } else {
-                MediaStore.Images.Media.DATA // Fallback to parse folder name from path
+                MediaStore.MediaColumns.DATA // Fallback to parse folder name from path
             }
-        )
-        val cursor = context.contentResolver.query(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            projection,
-            null,
-            null,
-            "${MediaStore.Images.Media.DATE_ADDED} DESC"
         )
 
-        cursor?.use {
-            val idCol = it.getColumnIndex(MediaStore.Images.Media._ID)
-            val dataCol = it.getColumnIndex(MediaStore.Images.Media.DATA)
-            val nameCol = it.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
-            val sizeCol = it.getColumnIndex(MediaStore.Images.Media.SIZE)
-            val bucketCol = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                it.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-            } else {
-                it.getColumnIndex(MediaStore.Images.Media.DATA)
-            }
-            while (it.moveToNext()) {
-                val id = if (idCol >= 0) it.getLong(idCol) else -1L
-                val path = if (dataCol >= 0) it.getString(dataCol) else null
-                val displayName = if (nameCol >= 0) it.getString(nameCol) else "photo_$id.jpg"
-                val fileSize = if (sizeCol >= 0) it.getLong(sizeCol) else 0L
-                
-                var folder = "Other"
-                if (bucketCol >= 0) {
-                    val rawFolder = it.getString(bucketCol)
-                    if (!rawFolder.isNullOrBlank()) {
-                        folder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                            rawFolder
-                        } else {
-                            // Extract parent directory name from path
-                            val file = File(rawFolder)
-                            file.parentFile?.name ?: "Other"
+        val contentUris = listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        )
+
+        for (baseUri in contentUris) {
+            val cursor = context.contentResolver.query(
+                baseUri,
+                projection,
+                null,
+                null,
+                "${MediaStore.MediaColumns.DATE_ADDED} DESC"
+            )
+
+            cursor?.use {
+                val idCol = it.getColumnIndex(MediaStore.MediaColumns._ID)
+                val dataCol = it.getColumnIndex(MediaStore.MediaColumns.DATA)
+                val nameCol = it.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
+                val sizeCol = it.getColumnIndex(MediaStore.MediaColumns.SIZE)
+                val bucketCol = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    it.getColumnIndex(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                } else {
+                    it.getColumnIndex(MediaStore.MediaColumns.DATA)
+                }
+                while (it.moveToNext()) {
+                    val id = if (idCol >= 0) it.getLong(idCol) else -1L
+                    val path = if (dataCol >= 0) it.getString(dataCol) else null
+                    val displayName = if (nameCol >= 0) it.getString(nameCol) else "media_$id"
+                    val fileSize = if (sizeCol >= 0) it.getLong(sizeCol) else 0L
+                    
+                    var folder = "Other"
+                    if (bucketCol >= 0) {
+                        val rawFolder = it.getString(bucketCol)
+                        if (!rawFolder.isNullOrBlank()) {
+                            folder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                rawFolder
+                            } else {
+                                // Extract parent directory name from path
+                                val file = File(rawFolder)
+                                file.parentFile?.name ?: "Other"
+                            }
                         }
                     }
-                }
-                if ((folder == "Other" || folder.isBlank()) && path != null) {
-                    val parentName = File(path).parentFile?.name
-                    if (!parentName.isNullOrBlank()) {
-                        folder = parentName
+                    if ((folder == "Other" || folder.isBlank()) && path != null) {
+                        val parentName = File(path).parentFile?.name
+                        if (!parentName.isNullOrBlank()) {
+                            folder = parentName
+                        }
                     }
-                }
 
-                val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                val file = if (path != null) File(path) else null
-                val uriStr = uri.toString()
-                val record = syncRecordsMap[uriStr]
-                val isUploaded = record?.isUploaded == true || (record?.sha256 != null && record.sha256 in cachedSha256Set)
+                    val uri = ContentUris.withAppendedId(baseUri, id)
+                    val file = if (path != null) File(path) else null
+                    val uriStr = uri.toString()
+                    val record = syncRecordsMap[uriStr]
+                    val isUploaded = record?.isUploaded == true || (record?.sha256 != null && record.sha256 in cachedSha256Set)
 
-                if (file?.exists() == true || path != null) {
-                    photos.add(LocalPhoto(
-                        uri = uri,
-                        file = file,
-                        name = displayName,
-                        size = fileSize,
-                        folderName = folder,
-                        isUploaded = isUploaded,
-                        sha256 = record?.sha256
-                    ))
+                    if (file?.exists() == true || path != null) {
+                        photos.add(LocalPhoto(
+                            uri = uri,
+                            file = file,
+                            name = displayName,
+                            size = fileSize,
+                            folderName = folder,
+                            isUploaded = isUploaded,
+                            sha256 = record?.sha256
+                        ))
+                    }
                 }
             }
         }
