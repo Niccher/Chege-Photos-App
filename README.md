@@ -3,7 +3,7 @@
 Native Kotlin Android companion application for the Chege Photos self-hosted photo management platform, built with Jetpack Compose, Room offline caching, and WorkManager background sync.
 
 **Stack**: Kotlin 2.0, Jetpack Compose, Material 3, Room, WorkManager, Retrofit 2, OkHttp 3, Okio, ML Kit.  
-**Audience**: If you only need to build and install the companion APK, this page is enough. Mobile engineers: [docs/README.md](docs/README.md).
+**If you only need to build and install the companion APK, this page is enough.** Mobile engineers: [docs/README.md](docs/README.md).
 
 ---
 
@@ -23,8 +23,8 @@ Native Kotlin Android companion application for the Chege Photos self-hosted pho
 * **Android Studio**: Ladybug (2024.2+) or Meerkat (2024.3+)
 * **Java Development Kit (JDK)**: JDK 17 or JDK 21
 * **Android Target**: Android 10+ (API level 29 or higher)
-* **Backend**: Running instance of [Chege Photos WebApp](https://github.com/niccher/Chege-Photos-WebApp) (e.g. `http://10.0.2.2:9005` for emulators, or LAN IP for physical devices).  
-  *(Note: The Android app talks exclusively to the WebApp; it does not connect directly to the ML microservice — the WebApp coordinates all AI indexing behind the scenes).*
+* **Backend**: Running instance of [Chege Photos Platform](https://github.com/niccher/Chege-Photos-Platform) (e.g. `http://10.0.2.2` on standard port 80 for emulators, or host LAN IP e.g. `http://192.168.x.x` for physical devices).  
+  *(Note: The Android app communicates exclusively with the WebApp gateway on port 80; it has zero direct connections to the ML microservice, Redis, or Qdrant vector engine).*
 
 ---
 
@@ -79,13 +79,14 @@ Detailed diagnostic steps and recovery procedures: [docs/user/troubleshooting.md
 
 ---
 
-## Engineering Documentation
+## Software Engineers
 
 For architecture, Room database schemas, streaming upload pipelines, and developer workflows, see the **[Engineering Handbook](docs/README.md)**:
 
 * [Architecture Overview](docs/architecture/overview.md)
 * [Network & API Communication](docs/architecture/communication.md)
 * [Data & Storage (Room SQLite & MediaStore)](docs/architecture/data-and-storage.md)
+* [Threat Model & Mobile Security](docs/architecture/threat-model.md)
 * [Android Services (Okio Streaming & WorkManager)](docs/services/android.md)
 * [Local Development & Gradle Tasks](docs/engineering/local-development.md)
 * [Making Changes & Definition of Done](docs/engineering/making-changes.md)
@@ -96,31 +97,21 @@ For architecture, Room database schemas, streaming upload pipelines, and develop
 ## Ecosystem & Multi-Repo Architecture
 
 ```
-[ Chege Photos Android ]
+[ Chege Photos App ] (Mobile Client)
          │
-         │ (HTTPS / Bearer Token - port 9005)
+         │ (HTTP/HTTPS / Bearer Token - Standard Port 80)
          ▼
-[ Chege Photos WebApp ] (Port 9005) ─── MySQL 8.4 (Port 9306)
-         │
-         │ (Internal HTTP / X-API-KEY - port 9051)
-         ▼
-[ ML Chege Photos ] (Port 9051) ─────── Qdrant Vector DB (Port 9052)
+[ Chege Photos Platform ] (Unified Backend Monorepo)
+ ├── Web App (CI4 / Port 80) ─── MySQL 8.4 (Port 3306) & Redis (Port 6379)
+ └── Vision Engine (FastAPI / Port 8000) ─── Qdrant Vector DB (Port 6333)
 ```
 
-### Architecture for Android Developers
-* **Direct Connection**: The Android companion client communicates **only with the WebApp**.
-* **Zero Direct ML Dependency**: Android never needs direct network access or credentials for the ML microservice or Qdrant vector database.
-* **Coordinated Features**: All ML-powered capabilities (face groupings, smart albums, CLIP semantic search) are requested through WebApp REST endpoints (`/api/v1/...`), which orchestrates them transparently.
+### Two-Repo Arrangement
 
----
-
-## Sibling Repositories
-
-| Repository | Responsibility | Tech Stack |
-|---|---|---|
-| **[Chege-Photos-Android](https://github.com/niccher/Chege-Photos-Android)** | Native Mobile Companion Client | Kotlin / Jetpack Compose |
-| **[Chege-Photos-WebApp](https://github.com/niccher/Chege-Photos-WebApp)** | Core Web UI, Admin, Auth & Mobile Sync | PHP 8.3 / CodeIgniter 4 |
-| **[Chege-Photos-ML](https://github.com/niccher/Chege-Photos-ML)** | Face Detection, YOLOv8, CLIP & Qdrant | Python 3.12 / FastAPI |
+| Component | Responsibility | Repository URL | Documentation |
+|---|---|---|---|
+| **Mobile Client** | Jetpack Compose Native Android App | [Chege-Photos-App](https://github.com/niccher/Chege-Photos-App) | [docs/](docs/) |
+| **Backend Monorepo** | Web UI, REST Gateway, Multimodal ML & Qdrant | [Chege-Photos-Platform](https://github.com/niccher/Chege-Photos-Platform) | [docs/](https://github.com/niccher/Chege-Photos-Platform/tree/main/docs) |
 
 ---
 

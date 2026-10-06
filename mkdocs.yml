@@ -1,0 +1,62 @@
+site_name: Chege Photos Android App Documentation
+site_description: Engineering & User documentation for Chege Photos Android App (Jetpack Compose, Room, WorkManager)
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: README.md
+  - User Guide:
+      - Setup & Run: user/setup-and-run.md
+      - Configuration: user/configuration.md
+      - Troubleshooting: user/troubleshooting.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Communication: architecture/communication.md
+      - Data & Storage: architecture/data-and-storage.md
+      - Threat Model: architecture/threat-model.md
+  - Services:
+      - Android Companion: services/android.md
+  - Engineering:
+      - Local Development: engineering/local-development.md
+      - Making Changes: engineering/making-changes.md
+      - Testing: engineering/testing.md
+      - CI/CD: engineering/ci.md
+      - Contributing: engineering/contributing.md
+      - Troubleshooting: engineering/troubleshooting.md
+      - Security: engineering/security.md
+      - Release Train: engineering/release.md
+  - Architecture Decision Records:
+      - "0001: Hybrid QR & Numeric Pairing": adr/0001-hybrid-qr-numeric-pairing.md
+      - "0003: On-Device OCR via ML Kit": adr/0003-on-device-ocr-via-ml-kit.md

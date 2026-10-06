@@ -4565,7 +4565,7 @@ fun ServerConfigScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "The server URL is where your Chege Photos backend is hosted. " +
-                            "For local servers on your network, use the LAN IP (e.g. 192.168.1.50:9005). " +
+                            "For local servers on your network, use the LAN IP (e.g. 192.168.1.50). " +
                             "For remote servers, use the full https URL. " +
                             "The app will automatically detect and use the correct protocol.",
                     style = MaterialTheme.typography.bodySmall,

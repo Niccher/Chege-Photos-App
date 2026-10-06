@@ -1,59 +1,44 @@
-# Built application packages
-*.apk
-*.ap_
-*.aab
+# Environments
+.env
+.env.*
+!.env.example
 
-# Dalvik & ART VM files
-*.dex
-
-# Java & Kotlin class files
-*.class
-
-# Generated files & schemas
-bin/
-gen/
-out/
-/schemas/
-
-# Gradle build cache & intermediate outputs
-.gradle/
-build/
-app/build/
-.kotlin/
-.cxx/
-.externalNativeBuild/
-
-# Local configuration files
-local.properties
-*.local.properties
-
-# Proguard / R8
-proguard/
-
-# Log & Heap dump files
-*.log
-*.hprof
-*.prof
-
-# Android Studio & IntelliJ IDEA
-*.iml
+# IDEs
 .idea/
-.navigation/
-captures/
+.vscode/
+*.swp
+*.swo
 
-# Keystores & Signing credentials
-*.jks
-*.keystore
-*.pepk
+# Dependencies
+vendor/
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
 
-# Google Services configuration
-google-services.json
+# Build
+build/
+dist/
+*.apk
+*.aab
+*.jar
+*.war
 
-# Agent and AI assistant configurations & skills
-.agents/
+# Logs and DB
+logs/
+*.log
+*.sqlite
+*.sqlite3
 
-# OS and Temporary files
+# OS
 .DS_Store
 Thumbs.db
-*.tmp
-*~
+
+# Android / Gradle
+.gradle/
+local.properties
+*.iml
+.cxx/
+capture/
